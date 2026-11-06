@@ -1,5 +1,0 @@
-# Netlify publica a pasta dist/ tal como está (sem build no servidor).
-# Para alterar a app: editar src/index.src.html, correr `python3 build.py` e fazer commit.
-[build]
-  publish = "dist"
-  command = ""

@@ -12,7 +12,7 @@ types.setTypeParser(1082, v => v);                                    // date ->
 
 const SCR = path.dirname(__filename);
 const ROOT = path.resolve(SCR, '..', '..');
-const DIST = path.join(ROOT, 'dist');
+const DIST = path.join(ROOT, 'docs');
 const SQL = path.join(ROOT, 'supabase', 'migrations', '20261105_financas_v1_1.sql');
 const SOCK = process.env.PGHOST || '/var/lib/postgresql/fintest';
 const BASE = 'https://klmjdjhvsxvopctgmhyu.supabase.co';

@@ -1,4 +1,4 @@
-"""Gera a pasta dist/ pronta a arrastar para o Netlify.
+"""Gera a pasta docs/, publicada pelo GitHub Pages (main /docs).
 - Escapa caracteres não-ASCII do JavaScript inline como \\uXXXX (evita SyntaxError em alojamentos com charset errado)
 - Gera os ícones e o manifesto
 """
@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(BASE, 'src', 'index.src.html')
-DIST = os.path.join(BASE, 'dist')
+DIST = os.path.join(BASE, 'docs')
 os.makedirs(DIST, exist_ok=True)
 
 html = open(SRC, encoding='utf-8').read()
@@ -68,6 +68,6 @@ json.dump({
     ]
 }, open(os.path.join(DIST, 'manifest.webmanifest'), 'w'), ensure_ascii=False, indent=2)
 
-# index.html não fica em cache: cada nova versão aparece logo no iPhone
-open(os.path.join(DIST, '_headers'), 'w').write('/index.html\n  Cache-Control: no-cache\n/\n  Cache-Control: no-cache\n')
+# sem processamento Jekyll: o Pages serve os ficheiros tal como estão
+open(os.path.join(DIST, '.nojekyll'), 'w').close()
 print('ok', os.listdir(DIST))

@@ -4,15 +4,15 @@ Web app pessoal para iPhone: finanças, divisão proporcional de despesas partil
 
 - **Frontend:** HTML + JavaScript num só ficheiro, instalável no ecrã principal do iPhone.
 - **Backend:** Supabase (projeto *GPP Dashboard*). Os dados estão protegidos por RLS: cada linha só é visível ao dono.
-- **Alojamento:** Netlify, ligado a este repositório, publica a pasta `dist/`.
+- **Alojamento:** GitHub Pages (ramo `main`, pasta `/docs`) em https://goncalopedrosapinto.github.io/gpp-dashboard/
 
 ## Estrutura
 
 | Pasta / ficheiro | O que é |
 |---|---|
 | `src/index.src.html` | Código-fonte da app (é aqui que se edita) |
-| `build.py` | Gera `dist/`: escapa o JS, cria ícones e manifesto |
-| `dist/` | O que vai para o Netlify |
+| `build.py` | Gera `docs/`: escapa o JS, cria ícones e manifesto |
+| `docs/` | O que o GitHub Pages publica (não editar à mão) |
 | `supabase/migrations/` | Esquema da base de dados (tabelas, funções, segurança) |
 | `tests/sql/` | Testes da base de dados (Postgres local) |
 | `tests/e2e/` | Teste de ponta a ponta num iPhone simulado (Playwright) |
@@ -22,7 +22,7 @@ Web app pessoal para iPhone: finanças, divisão proporcional de despesas partil
 ```bash
 # editar src/index.src.html
 python3 build.py          # precisa de Pillow
-git commit -am "..." && git push   # o Netlify publica sozinho
+git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 ```
 
 ## Regras de negócio
@@ -31,3 +31,7 @@ git commit -am "..." && git push   # o Netlify publica sozinho
 - Se faltar um rendimento do mês, usa-se o último mês completo e o acerto fica marcado como provisório.
 - Despesas fixas são geradas uma vez por mês; se apagares a do mês, não volta. Dia 31 passa para o último dia do mês.
 - Gastos Apple Pay entram via Atalho do iPhone (`rpc/registar_apple_pay`, protegido por token pessoal). Corrigir a categoria/partilha de um comerciante memoriza a regra para os próximos gastos.
+
+## Segurança
+
+Este repositório é público. Nunca pôr aqui a chave `service_role` nem tokens: a chave publicável no `index.html` é pública por natureza e os dados estão protegidos por RLS no Supabase.
