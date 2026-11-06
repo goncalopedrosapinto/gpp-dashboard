@@ -110,4 +110,77 @@ do $$ declare r record; begin
   if r.categoria <> 'Supermercado' or not r.partilhada or r.recebido then raise exception 'T8 falhou: %', r; end if;
 end $$;
 
+
+-- ===== v1.4: contas e saldos (utilizador limpo C) =====
+reset role;
+insert into auth.users values ('33333333-3333-3333-3333-333333333333') on conflict do nothing;
+set role authenticated;
+set request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+\echo '--- T9: contas, ajustes, transferencias ---'
+select criar_conta('CGD', 'corrente', 1000, false) as cgd \gset
+select criar_conta('Poupança', 'poupanca', 5000, false) as poup \gset
+select set_config('t.cgd', :'cgd', false) \gset
+select set_config('t.poup', :'poup', false) \gset
+do $$
+declare cgd bigint := current_setting('t.cgd')::bigint; poup bigint := current_setting('t.poup')::bigint;
+  function_saldo numeric;
+begin
+  if not (select principal from contas where id = cgd) then raise exception 'T9 falhou: primeira conta devia ser principal'; end if;
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1000 then raise exception 'T9 falhou: saldo inicial CGD'; end if;
+  if (select saldo_atual from saldos_contas where conta_id = poup) <> 5000 then raise exception 'T9 falhou: saldo inicial poupanca'; end if;
+
+  insert into ganhos (valor, descricao) values (200, 'Salário');                       -- hoje, depois do ajuste
+  insert into despesas (valor, descricao) values (50, 'Jantar');                       -- hoje
+  insert into despesas (data, valor, descricao) values (hoje_lisboa() - 1, 30, 'Ontem'); -- antes do ajuste: ignorado
+  insert into despesas (data, valor, descricao) values (hoje_lisboa() + 10, 40, 'Fixa a vencer');
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1150 then raise exception 'T9 falhou: atual %', (select saldo_atual from saldos_contas where conta_id = cgd); end if;
+  if (select saldo_previsto from saldos_contas where conta_id = cgd) <> 1110 then raise exception 'T9 falhou: previsto'; end if;
+
+  insert into despesas (valor, descricao, partilhada, parte_dela) values (60, 'Compras', true, 30);
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1090 then raise exception 'T9 falhou: partilhada por receber'; end if;
+  update despesas set recebido = true where descricao = 'Compras';
+  if (select recebido_em from despesas where descricao = 'Compras') is null then raise exception 'T9 falhou: recebido_em'; end if;
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1120 then raise exception 'T9 falhou: recebido da Bia'; end if;
+  update despesas set recebido = false where descricao = 'Compras';
+  if (select recebido_em from despesas where descricao = 'Compras') is not null then raise exception 'T9 falhou: desmarcar recebido'; end if;
+  update despesas set recebido = true where descricao = 'Compras';
+
+  insert into transferencias (de_conta, para_conta, valor) values (cgd, poup, 100);
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1020
+     or (select saldo_atual from saldos_contas where conta_id = poup) <> 5100 then raise exception 'T9 falhou: transferencia'; end if;
+
+  if ajustar_saldo(cgd, 1000) <> -20 then raise exception 'T9 falhou: diferenca do ajuste'; end if;
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1000 then raise exception 'T9 falhou: depois do ajuste'; end if;
+  if (select saldo_previsto from saldos_contas where conta_id = cgd) <> 960 then raise exception 'T9 falhou: previsto depois do ajuste'; end if;
+
+  insert into despesas (valor, descricao, conta_id) values (10, 'Da poupança', poup);
+  if (select saldo_atual from saldos_contas where conta_id = poup) <> 5090 then raise exception 'T9 falhou: gasto noutra conta'; end if;
+  if (select saldo_atual from saldos_contas where conta_id = cgd) <> 1000 then raise exception 'T9 falhou: gasto noutra conta mexeu na principal'; end if;
+
+  perform criar_conta('Revolut', 'outra', 50, true);
+  if (select count(*) from contas where principal) <> 1 or not (select principal from contas where nome = 'Revolut') then raise exception 'T9 falhou: nova principal'; end if;
+  perform definir_principal(cgd);
+  if not (select principal from contas where id = cgd) or (select count(*) from contas where principal) <> 1 then raise exception 'T9 falhou: definir_principal'; end if;
+  raise notice 'contas e saldos: OK';
+end $$;
+
+\echo '--- T10: isolamento das contas ---'
+set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  if (select count(*) from contas) + (select count(*) from saldos_contas) + (select count(*) from transferencias) <> 0 then raise exception 'T10 falhou: B ve contas'; end if;
+  begin
+    insert into transferencias (de_conta, para_conta, valor) values (current_setting('t.cgd')::bigint, current_setting('t.poup')::bigint, 1);
+    raise exception 'T10 falhou: B transferiu de contas de C';
+  exception when raise_exception then
+    if sqlerrm not like 'contas inválidas%' then raise; end if;
+    raise notice 'transferencia com contas alheias recusada: OK';
+  end;
+end $$;
+reset role; set role anon; reset request.jwt.claim.sub;
+do $$ begin
+  begin perform 1 from saldos_contas; raise exception 'T10 falhou: anon le saldos';
+  exception when insufficient_privilege then raise notice 'anon sem saldos: OK'; end;
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

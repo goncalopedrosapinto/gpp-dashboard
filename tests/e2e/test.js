@@ -43,7 +43,7 @@ function subDe(hdr) {
   try { const p = JSON.parse(Buffer.from(parts[1], 'base64url').toString()); return p.role === 'authenticated' ? p.sub : null; } catch (e) { return null; }
 }
 const ident = k => { if (!/^[a-z_][a-z0-9_]*$/.test(k)) throw new Error('identificador inválido ' + k); return '"' + k + '"'; };
-const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay'];
+const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay', 'criar_conta', 'ajustar_saldo', 'definir_principal'];
 const COMPOSTAS = ['garantir_config'];
 const log = [];
 
@@ -170,6 +170,10 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const tab = async n => { await page.click(`.tab:has-text("${n}")`); await page.waitForTimeout(250); };
   const guardar = async () => { await page.click('.sheet .snav .link.b'); await fechado(); };
   const bd = async (sql, a) => (await pool.query(sql, a || [])).rows;
+  const bdUser = async sql => { const c = await pool.connect(); try { await c.query('begin'); await c.query('set local role authenticated'); await c.query("select set_config('request.jwt.claim.sub', $1, true)", [USER.id]); const r = (await c.query(sql)).rows; await c.query('commit'); return r; } finally { c.release(); } };
+  const semEsp = async () => (await texto()).replace(/[\s\u00a0\u202f]/g, '');
+  const EURN = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
+  const eur = v => EURN.format(v).replace(/[\s\u00a0\u202f]/g, '');
 
   await page.goto(BASE + '/app/index.html');
   await page.waitForSelector('form.login');
@@ -191,6 +195,28 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check((await bd('select nome_ela from config'))[0].nome_ela === 'Bia', 'nome por defeito: Bia');
   await shot('02-resumo-vazio');
   await auditar('resumo vazio');
+  console.log('Contas');
+  await page.click('button:has-text("Indicar o saldo da conta principal")');
+  await page.waitForSelector('dialog.sheet[open]');
+  check(await page.isDisabled('.sheet [aria-label="Conta principal"]') && await page.isChecked('.sheet [aria-label="Conta principal"]'), 'primeira conta é a principal');
+  await page.click('.sheet .snav .link.b');
+  check(await tem('Indica quanto tens hoje nesta conta'), 'sem saldo: erro junto ao Guardar');
+  await page.fill('.sheet [aria-label="Saldo hoje"]', '2.500,00');
+  await page.fill('.sheet [aria-label="Nome da conta"]', 'CGD à ordem');
+  await guardar();
+  await toastTem('Conta criada');
+  await page.click('button:has-text("Nova conta")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Saldo hoje"]', '8000');
+  await page.fill('.sheet [aria-label="Nome da conta"]', 'Poupança');
+  await page.click('.sheet .chip:has-text("Poupança")');
+  await guardar();
+  await page.waitForTimeout(300);
+  check((await semEsp()).includes('10500,00€'), 'o meu dinheiro: 2500 + 8000 = 10 500,00 €');
+  const contasBd = await bd('select id, nome, tipo, principal from contas order by id');
+  check(contasBd.length === 2 && contasBd[0].principal && contasBd[1].tipo === 'poupanca' && !contasBd[1].principal, 'contas gravadas: CGD principal, Poupança do tipo poupança');
+  await shot('02b-contas');
+  await auditar('contas');
+
 
   console.log('Ganhos');
   await tab('Ganhos');
@@ -340,6 +366,39 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await auditar('ajustes');
   await page.click('button:has-text("Fechar")');
   await page.waitForSelector('h1:has-text("Resumo")');
+
+
+  console.log('Ajustar, transferir, gastar da poupança');
+  await page.waitForSelector('h1:has-text("Resumo")');
+  const dbTot = (await bdUser('select sum(saldo_atual)::float8 t from saldos_contas'))[0].t;
+  check((await semEsp()).includes(eur(dbTot)), 'total no ecrã bate com a base de dados (' + eur(dbTot) + ')');
+  await page.click('[aria-label="Ajustar: CGD à ordem"]'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Saldo real hoje"]', '3000');
+  await page.waitForTimeout(100);
+  check((await page.textContent('.sheet .split')).includes('diferença'), 'ajustar mostra a diferença face ao calculado');
+  await shot('11b-ajustar');
+  await auditar('ajustar');
+  await guardar();
+  await toastTem('Saldo ajustado');
+  const cgd = async () => (await page.textContent('.lrow:has(.rtitle:text-is("CGD à ordem")) .rval')).replace(/[\s\u00a0\u202f]/g, '');
+  const pou = async () => (await page.textContent('.lrow:has(.rtitle:text-is("Poupança")) .rval')).replace(/[\s\u00a0\u202f]/g, '');
+  check((await cgd()) === '3000,00€', 'depois do ajuste a CGD mostra exatamente 3000,00 €');
+  const pouAntes = Number((await bdUser("select saldo_atual::float8 s from saldos_contas where nome = 'Poupança'"))[0].s);
+  await page.click('button:has-text("Transferir")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor a transferir"]', '500');
+  await guardar();
+  await toastTem('Transferido');
+  check((await cgd()) === '2500,00€' && (await pou()) === eur(pouAntes + 500), 'transferir 500 €: CGD 2500 €, Poupança +500 €');
+  await tab('Gastos');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor"]', '100');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Seguro');
+  await page.selectOption('.sheet [aria-label="Conta"]', { label: 'Poupança' });
+  await guardar();
+  const seg = (await bd("select d.conta_id, c.nome from despesas d join contas c on c.id = d.conta_id where d.descricao = 'Seguro'"))[0];
+  check(seg && seg.nome === 'Poupança', 'gasto com conta escolhida grava na Poupança');
+  await tab('Resumo');
+  check((await pou()) === eur(pouAntes + 400) && (await cgd()) === '2500,00€', 'o seguro sai da Poupança e não mexe na CGD');
 
   console.log('Editar e apagar');
   await tab('Fixas');

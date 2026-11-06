@@ -32,6 +32,7 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 - **Conta partilhada:** entra pelo total que paguei, com a parte da Bia. Fica *a receber* até marcar que recebi. O reembolso reduz o custo; não conta como ganho.
 - **Calculadora:** o único sítio com divisão proporcional ao rendimento líquido de cada um. Registar a partir dela preenche a parte da Bia.
 - **Despesas fixas:** geradas uma vez por mês, com a parte da Bia se for partilhada. Se apagar a do mês, não volta. Dia 31 passa para o último dia do mês.
+- **Contas:** o saldo de cada conta é o último ajuste ao valor real mais os movimentos posteriores (ganhos, gastos, o que a Bia devolve, transferências). Um ajuste no dia D já inclui tudo o que tem data anterior; do próprio dia só conta o que for registado depois. Gastos e ganhos sem conta escolhida vão para a principal.
 - **Apple Pay:** entra via Atalho do iPhone (`rpc/registar_apple_pay`, protegido por token pessoal). Corrigir a categoria/partilha de um comerciante memoriza a regra para os próximos gastos.
 
 ## Regras de interface
