@@ -155,7 +155,18 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const toastTem = async t => { await page.waitForFunction(x => document.getElementById('toast').textContent.includes(x), t, { timeout: 5000 }); };
   const texto = () => page.evaluate(() => document.body.innerText);
   const tem = async t => { await page.waitForFunction(x => document.body.innerText.includes(x), t, { timeout: 5000 }).catch(() => {}); return (await texto()).includes(t); };
-  const fechado = () => page.waitForSelector('.backdrop', { state: 'detached', timeout: 5000 });
+  const fechado = () => page.waitForSelector('dialog.sheet', { state: 'detached', timeout: 5000 });
+  const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+  const a11y = [];
+  async function auditar(nome) {
+    const v = await page.evaluate(async src => {
+      if (!window.axe) { const sc = document.createElement('script'); sc.textContent = src; document.head.append(sc); }
+      const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] } });
+      return r.violations.map(x => ({ id: x.id, impact: x.impact, n: x.nodes.length, alvo: x.nodes.slice(0, 2).map(n => n.target.join(' ')).join(' | ') }));
+    }, AXE);
+    v.forEach(x => a11y.push(nome + ': ' + x.id + ' [' + x.impact + '] x' + x.n + ' -> ' + x.alvo));
+  }
+  const apagarNaFolha = async () => { await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]'); await page.click('dialog.alert .danger'); await fechado(); };
   const tab = async n => { await page.click(`.tab:has-text("${n}")`); await page.waitForTimeout(250); };
   const guardar = async () => { await page.click('.sheet .snav .link.b'); await fechado(); };
   const bd = async (sql, a) => (await pool.query(sql, a || [])).rows;
@@ -168,8 +179,9 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.fill('input[type=email]', USER.email);
   await page.fill('input[type=password]', 'errada');
   await page.click('button[type=submit]');
-  await toastTem('Email ou palavra-passe errados');
-  check(true, 'palavra-passe errada mostra erro em português');
+  await page.waitForSelector('#login-erro:not([hidden])');
+  check((await page.textContent('#login-erro')).includes('Email ou palavra-passe errados') && (await page.getAttribute('input[type=password]', 'aria-invalid')) === 'true', 'palavra-passe errada: erro junto ao formulário, campos marcados');
+  await auditar('login com erro');
   erros.length = 0;
   await page.fill('input[type=password]', USER.password);
   await page.click('button[type=submit]');
@@ -178,11 +190,12 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(await tem('Novembro 2026'), 'entra no Resumo de novembro 2026');
   check((await bd('select nome_ela from config'))[0].nome_ela === 'Bia', 'nome por defeito: Bia');
   await shot('02-resumo-vazio');
+  await auditar('resumo vazio');
 
   console.log('Ganhos');
   await tab('Ganhos');
   async function novoGanho(v, d, tipo) {
-    await page.click('.addbtn'); await page.waitForSelector('.sheet');
+    await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
     await page.fill('.sheet [aria-label="Valor do ganho"]', v);
     await page.fill('.sheet [aria-label="Descrição"]', d);
     if (tipo) await page.click(`.sheet .chip:has-text("${tipo}")`);
@@ -198,7 +211,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   console.log('Fixas');
   await tab('Fixas');
   async function novaFixa(v, n, dia, cat, parteDela, metade) {
-    await page.click('.addbtn'); await page.waitForSelector('.sheet');
+    await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
     await page.fill('.sheet [aria-label="Valor mensal"]', v);
     await page.fill('.sheet [aria-label="Nome"]', n);
     await page.fill('.sheet [aria-label="Dia do pagamento"]', dia);
@@ -218,6 +231,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(tf.includes('675,00') && tf.includes('320,00') && tf.includes('355,00'), 'fixas: total 675 €, parte da Bia 320 €, teu custo 355 €');
   check(tf.includes('Bia paga 20,00'), '"Metade" põe 20 € na água');
   await shot('04-fixas');
+  await auditar('fixas');
 
   console.log('Gastos');
   await tab('Gastos');
@@ -225,7 +239,16 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(td.includes('3 gastos'), 'as 3 fixas entraram sozinhas');
   check(td.toLowerCase().includes('segunda-feira, 30 de novembro'), 'água (dia 31) passou para 30 de novembro');
   check(td.includes('Bia deve 300,00'), 'renda mostra "Bia deve 300,00 €"');
-  await page.click('.addbtn'); await page.waitForSelector('.sheet');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.click('.sheet .snav .link.b');
+  await page.waitForSelector('.sheet .ferr:not([hidden])');
+  check((await page.textContent('.sheet .ferr')).includes('Indica um valor maior que zero') && (await page.getAttribute('.sheet [aria-label="Valor"]', 'aria-invalid')) === 'true', 'guardar sem valor: erro junto ao botão, campo marcado, folha continua aberta');
+  await shot('05a-erro-valor');
+  await auditar('folha com erro');
+  await page.keyboard.press('Escape');
+  await fechado();
+  check(true, 'Escape fecha a folha');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Valor"]', '50');
   await page.fill('.sheet [aria-label="Descrição"]', 'Jantar');
   await page.click('.sheet .chip:has-text("Restauração")');
@@ -249,8 +272,9 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const cfg = (await bd('select calc_eu, calc_ela from config'))[0];
   check(cfg.calc_eu === 1500 && cfg.calc_ela === 1000, 'rendimentos da calculadora ficam guardados');
   await shot('06-calcular');
+  await auditar('calcular');
   await page.click('button:has-text("Registar como gasto partilhado")');
-  await page.waitForSelector('.sheet');
+  await page.waitForSelector('dialog.sheet[open]');
   check((await page.inputValue('.sheet [aria-label="Parte da Bia"]')) === '12,00', 'registar a partir da calculadora preenche a parte da Bia (12,00)');
   await page.fill('.sheet [aria-label="Descrição"]', 'Gasolina');
   await guardar();
@@ -272,7 +296,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.click('.chip:has-text("Por rever")');
   await page.waitForTimeout(200);
   await shot('07-por-rever');
-  await page.click('.lrow:has-text("Continente")'); await page.waitForSelector('.sheet');
+  await page.click('.lrow:has-text("Continente")'); await page.waitForSelector('dialog.sheet[open]');
   await page.click('.sheet .chip:has-text("Supermercado")');
   await page.check('.sheet [aria-label="Partilhada"]');
   await guardar();
@@ -283,6 +307,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const cont = await page.textContent('.lrow:has-text("CONTINENTE")');
   check(cont.includes('Supermercado') && cont.includes('parte da Bia por definir'), 'segunda compra no Continente já entra como Supermercado + partilhada');
   await shot('08-gastos');
+  await auditar('gastos');
 
   console.log('Resumo');
   await tab('Resumo');
@@ -293,11 +318,12 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(tr.includes('790,70') && tr.includes('765,70') && tr.includes('25,00'), 'gastos 790,70 €, recebido 25 €, custo líquido 765,70 €');
   check(tr.includes('332,00') && tr.includes('5 contas partilhadas') && tr.includes('2 contas sem a parte da Bia definida'), 'a receber da Bia: 332,00 € em 5 contas (2 por definir)');
   await shot('09-resumo');
+  await auditar('resumo');
   await page.click('.lrow:has-text("Renda") .mini');
   await toastTem('Recebido: 300,00');
   check(await tem('1124,80'), 'marcar a renda como recebida: saldo sobe para 1124,80 €');
   await page.click('.lrow:has(.rtitle:text-is("Continente")) .mini');
-  await page.waitForSelector('.sheet');
+  await page.waitForSelector('dialog.sheet[open]');
   await page.click('.sheet button:has-text("Metade")');
   await page.check('.sheet [aria-label="Já recebi"]');
   await guardar();
@@ -311,25 +337,30 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.waitForSelector('h1:has-text("Ajustes")');
   check((await page.inputValue('[aria-label="Nome dela"]')) === 'Bia' && (await tem(token.slice(0, 8))), 'Ajustes: nome Bia e token do Atalho');
   await shot('11-ajustes');
+  await auditar('ajustes');
   await page.click('button:has-text("Fechar")');
   await page.waitForSelector('h1:has-text("Resumo")');
 
   console.log('Editar e apagar');
   await tab('Fixas');
-  await page.click('.lrow:has-text("Ginásio")'); await page.waitForSelector('.sheet');
+  await page.click('.lrow:has-text("Ginásio")'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Valor mensal"]', '40');
   await guardar();
   check((await bd("select valor from despesas where descricao = 'Ginásio'"))[0].valor === 40, 'mudar a fixa atualiza o lançamento deste mês');
   await tab('Gastos');
-  await page.click('.lrow:has-text("Jantar")'); await page.waitForSelector('.sheet');
-  await page.click('.sheet .btn.danger'); await page.click('.sheet .btn.danger');
-  await fechado();
+  await page.click('.lrow:has-text("Jantar")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]');
+  await shot('12a-confirmar-apagar');
+  await auditar('confirmar apagar');
+  await page.click('dialog.alert button:has-text("Cancelar")');
+  await page.waitForSelector('dialog.alert', { state: 'detached' });
+  check((await bd("select count(*)::int n from despesas where descricao = 'Jantar'"))[0].n === 1, 'Cancelar na confirmação não apaga');
+  await apagarNaFolha();
   await page.waitForTimeout(400);
   check((await bd("select count(*)::int n from despesas where descricao = 'Jantar'"))[0].n === 0 && !(await texto()).includes('Jantar'), 'apagar gasto com dois toques');
   await tab('Ganhos');
-  await page.click('.lrow:has-text("Comissões")'); await page.waitForSelector('.sheet');
-  await page.click('.sheet .btn.danger'); await page.click('.sheet .btn.danger');
-  await fechado();
+  await page.click('.lrow:has-text("Comissões")'); await page.waitForSelector('dialog.sheet[open]');
+  await apagarNaFolha();
   check(await tem('1250,00'), 'apagar ganho: total passa a 1250,00 €');
 
   console.log('Meses e sessão');
@@ -343,6 +374,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.waitForTimeout(300);
   await shot('12-resumo-escuro');
+  await auditar('resumo escuro');
   await tab('Gastos'); await shot('13-gastos-escuro');
   await page.emulateMedia({ colorScheme: 'light' });
   await tab('Resumo');
@@ -352,6 +384,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(true, 'terminar sessão volta ao ecrã de entrada');
   check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'sem scroll horizontal');
 
+  check(a11y.length === 0, 'axe-core: sem violações de acessibilidade' + (a11y.length ? '\n      ' + a11y.join('\n      ') : ''));
   check(erros.length === 0, 'sem erros de JavaScript' + (erros.length ? ': ' + erros.join(' | ') : ''));
   const esperados = ['token inválido', 'permission denied for table ganhos'];
   const bdErros = log.filter(l => (l.startsWith('ERRO') || l.startsWith('SEM ROTA')) && !esperados.some(x => l.includes(x)));

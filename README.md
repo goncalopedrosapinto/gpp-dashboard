@@ -34,6 +34,17 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 - **Despesas fixas:** geradas uma vez por mês, com a parte da Bia se for partilhada. Se apagar a do mês, não volta. Dia 31 passa para o último dia do mês.
 - **Apple Pay:** entra via Atalho do iPhone (`rpc/registar_apple_pay`, protegido por token pessoal). Corrigir a categoria/partilha de um comerciante memoriza a regra para os próximos gastos.
 
+## Regras de interface
+
+Segue o [ibelick/ui-skills](https://github.com/ibelick/ui-skills) (`baseline-ui` + `fixing-accessibility`), adaptado a CSS e JavaScript sem frameworks:
+
+- Folhas de edição e confirmações em `<dialog>` nativo (foco preso, Escape fecha, foco volta ao botão de origem).
+- Apagar pede sempre confirmação.
+- Erros aparecem junto ao botão Guardar e o campo fica marcado (`aria-invalid`); os avisos rápidos só servem para sucesso.
+- Carregamento com esqueletos estáticos; estados vazios com uma ação.
+- Listas em `ul`/`li`, títulos `h1` → `h2` → `h3`, foco visível, contraste AA (verificado com axe-core no teste de ponta a ponta).
+- Sem `letter-spacing`, sem gradientes, sem animações além de ≤150 ms em controlos; respeita `prefers-reduced-motion`.
+
 ## Segurança
 
 Este repositório é público. Nunca pôr aqui a chave `service_role` nem tokens: a chave publicável no `index.html` é pública por natureza e os dados estão protegidos por RLS no Supabase.

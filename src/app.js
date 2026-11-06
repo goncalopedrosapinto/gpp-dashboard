@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.2 · nov 2026';
+const VERSAO = 'v1.3 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -152,61 +152,107 @@ function copiar(txt) {
 }
 
 // Blocos de interface
+let uid = 0;
 const group = (...rows) => h('div', { class: 'group' }, rows);
+const lista = items => h('ul', { class: 'group', role: 'list' }, items.map(it => h('li', null, it)));
 const grow = (label, control) => h('div', { class: 'grow' }, typeof label === 'string' ? h('span', { class: 'glab', text: label }) : label, control);
 const kv = (k, v, cls) => grow(k, h('span', { class: 'gval num' + (cls ? ' ' + cls : ''), text: v }));
-const glabel = t => h('div', { class: 'glabel', text: t });
+const glabel = (t, nivel) => h(nivel || 'h2', { class: 'glabel', text: t });
 const hint = (t, cls) => h('p', { class: 'hint' + (cls ? ' ' + cls : ''), text: t });
-const vazio = t => h('p', { class: 'empty', text: t });
+// Estado vazio: sempre com uma ação clara
+const vazio = (t, rotulo, acao) => h('div', { class: 'empty' }, h('p', { text: t }),
+  acao ? h('button', { type: 'button', class: 'btn primary', text: rotulo, onclick: acao }) : null);
+// Carregamento: esqueleto estático + texto para leitores de ecrã
+const carregando = () => [
+  h('p', { class: 'sr-only', role: 'status', text: 'A carregar…' }),
+  h('div', { class: 'skel', 'aria-hidden': 'true' }, h('i', { class: 'w40' }), h('i', { class: 'big' }), h('i'), h('i', { class: 'w60' })),
+  h('div', { class: 'skel', 'aria-hidden': 'true' }, h('i'), h('i', { class: 'w60' }), h('i'), h('i', { class: 'w40' }))
+];
 
 function campoValor(valor, label, extra) {
   return h('input', Object.assign({ class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: toInput(valor), 'aria-label': label }, extra || {}));
 }
-function chips(lista, st) {
-  const box = h('div', { class: 'chips' });
-  const draw = () => box.replaceChildren(...lista.map(c => h('button', {
-    type: 'button', class: 'chip' + (st.categoria === c ? ' on' : ''), text: c,
-    onclick: () => { st.categoria = st.categoria === c ? null : c; draw(); }
-  })));
-  draw();
+function chips(lista, st, rotulo) {
+  const box = h('div', { class: 'chips', role: 'group', 'aria-label': rotulo || 'Categoria' });
+  const btns = lista.map(c => h('button', {
+    type: 'button', class: 'chip', text: c, 'aria-pressed': String(st.categoria === c),
+    onclick: () => {
+      st.categoria = st.categoria === c ? null : c;
+      btns.forEach((b, i) => b.setAttribute('aria-pressed', String(st.categoria === lista[i])));
+    }
+  }));
+  box.append(...btns);
   return box;
 }
-function botaoApagar(rotulo, acao) {
-  let armado = false, t;
+// Confirmação para ações destrutivas (alertdialog nativo)
+function confirmar(titulo, texto, acaoTxt) {
+  return new Promise(resolve => {
+    const id = 'al' + (++uid), antes = document.activeElement;
+    const cancelar = h('button', { type: 'button', text: 'Cancelar' });
+    const sim = h('button', { type: 'button', class: 'danger', text: acaoTxt });
+    const dlg = h('dialog', { class: 'alert', role: 'alertdialog', 'aria-labelledby': id + '-t', 'aria-describedby': id + '-d' },
+      h('h2', { id: id + '-t', text: titulo }), h('p', { id: id + '-d', text: texto }), h('div', { class: 'acts2' }, cancelar, sim));
+    let res = false;
+    cancelar.addEventListener('click', () => dlg.close());
+    sim.addEventListener('click', () => { res = true; dlg.close(); });
+    dlg.addEventListener('close', () => { dlg.remove(); if (antes && antes.isConnected && antes.focus) antes.focus(); resolve(res); });
+    document.body.append(dlg);
+    dlg.showModal();
+    cancelar.focus();
+  });
+}
+function botaoApagar(rotulo, pergunta, texto, acao, folha) {
   const b = h('button', { type: 'button', class: 'btn danger', text: rotulo });
   b.addEventListener('click', async () => {
-    if (!armado) {
-      armado = true; b.textContent = 'Toca outra vez para apagar';
-      t = setTimeout(() => { armado = false; b.textContent = rotulo; }, 3000);
-      return;
-    }
-    clearTimeout(t); b.disabled = true;
-    try { await acao(); } catch (e) { erro(e); b.disabled = false; }
+    if (!(await confirmar(pergunta, texto, 'Apagar'))) return;
+    b.disabled = true;
+    try { await acao(); } catch (e) { console.error(e); folha().erro(traduzErro(e)); b.disabled = false; }
   });
   return b;
 }
+// Folha de edição: <dialog> nativo. Erros aparecem junto ao botão Guardar e no campo.
 function sheet(titulo, conteudo, onSave) {
-  const back = h('div', { class: 'backdrop' });
+  const id = 'sh' + (++uid), antes = document.activeElement;
+  const err = h('p', { class: 'ferr', id: id + '-err', role: 'alert', hidden: true });
   const guardar = h('button', { class: 'link b', type: 'button', text: 'Guardar' });
-  function fechar() { back.remove(); document.body.classList.remove('noscroll'); }
-  const panel = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': titulo },
-    h('div', { class: 'grab' }),
+  const dlg = h('dialog', { class: 'sheet', 'aria-labelledby': id + '-t' });
+  const inner = h('div', { class: 'sheet-in' },
+    h('div', { class: 'grab', 'aria-hidden': 'true' }),
     h('div', { class: 'snav' },
-      h('button', { class: 'link', type: 'button', text: 'Cancelar', onclick: fechar }),
-      h('div', { class: 'stitle', text: titulo }),
+      h('button', { class: 'link', type: 'button', text: 'Cancelar', onclick: () => fechar() }),
+      h('h2', { class: 'stitle', id: id + '-t', text: titulo }),
       h('div', { class: 'r' }, guardar)),
-    conteudo);
-  back.append(panel);
-  back.addEventListener('click', e => { if (e.target === back) fechar(); });
+    err, conteudo);
+  dlg.append(inner);
+  let campoErr = null;
+  function limpar() {
+    err.hidden = true; err.textContent = '';
+    if (campoErr) { campoErr.removeAttribute('aria-invalid'); campoErr.removeAttribute('aria-describedby'); campoErr = null; }
+  }
+  function mostrarErro(msg, campo) {
+    limpar();
+    err.textContent = msg; err.hidden = false;
+    if (campo) { campo.setAttribute('aria-invalid', 'true'); campo.setAttribute('aria-describedby', err.id); campoErr = campo; campo.focus(); }
+    return false;
+  }
+  function fechar() { if (dlg.open) dlg.close(); }
+  inner.addEventListener('input', () => { if (!err.hidden) limpar(); });
+  dlg.addEventListener('click', e => { if (e.target === dlg) fechar(); }); // toque fora da folha
+  dlg.addEventListener('close', () => {
+    dlg.remove();
+    if (!document.querySelector('dialog.sheet')) document.body.classList.remove('noscroll');
+    if (antes && antes.isConnected && antes.focus) antes.focus();
+  });
   guardar.addEventListener('click', async () => {
-    guardar.disabled = true;
+    guardar.disabled = true; limpar();
     try { const r = await onSave(); if (r !== false) fechar(); }
-    catch (e) { erro(e); }
+    catch (e) { console.error(e); mostrarErro(traduzErro(e)); }
     finally { guardar.disabled = false; }
   });
-  document.body.append(back);
+  document.body.append(dlg);
   document.body.classList.add('noscroll');
-  return { fechar: fechar };
+  dlg.showModal();
+  return { fechar: fechar, erro: mostrarErro };
 }
 
 // ===================== Dados =====================
@@ -259,7 +305,7 @@ function tagsPartilha(x) {
 }
 
 function viewMes() {
-  if (S.loading && !S.despesas.length && !S.ganhos.length) return [vazio('A carregar…')];
+  if (S.loading && !S.despesas.length && !S.ganhos.length) return carregando();
   const out = [];
   const ganhos = soma(S.ganhos, x => x.valor);
   const gastos = soma(S.despesas, x => x.valor);
@@ -285,34 +331,42 @@ function viewMes() {
     out.push(glabel('A receber ' + DA()), group(
       h('div', { class: 'hero' },
         h('div', { class: 'k', text: S.aReceber.length + (S.aReceber.length === 1 ? ' conta partilhada' : ' contas partilhadas') }),
-        h('div', { class: 'big', text: fmt(total) })),
-      S.aReceber.map(x => h('div', { class: 'lrow' },
-        h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
-          h('div', { class: 'rtitle', text: x.descricao || x.comerciante || 'Sem descrição' }),
-          h('div', { class: 'rsub', text: diaCurto(x.data) + ' · total ' + fmt(x.valor) })),
-        h('div', { class: 'rval', text: x.parte_dela != null ? fmt(x.parte_dela) : '—' }),
-        h('button', { type: 'button', class: 'mini', text: x.parte_dela != null ? 'Recebi' : 'Definir', onclick: () => marcarRecebido(x) })))
-    ), semParte ? hint(semParte + (semParte === 1 ? ' conta sem' : ' contas sem') + ' a parte ' + DA() + ' definida.', 'warn') : null);
+        h('div', { class: 'big', text: fmt(total) }))),
+      h('div', { style: 'height:8px' }),
+      lista(S.aReceber.map(x => {
+        const t = x.descricao || x.comerciante || 'Sem descrição';
+        return h('div', { class: 'lrow' },
+          h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
+            h('div', { class: 'rtitle', text: t }),
+            h('div', { class: 'rsub', text: diaCurto(x.data) + ' · total ' + fmt(x.valor) })),
+          h('div', { class: 'rval', text: x.parte_dela != null ? fmt(x.parte_dela) : '—' }),
+          h('button', {
+            type: 'button', class: 'mini', text: x.parte_dela != null ? 'Recebi' : 'Definir',
+            'aria-label': x.parte_dela != null ? 'Recebi: ' + t + ', ' + fmt(x.parte_dela) : 'Definir: parte ' + DA() + ' em ' + t,
+            onclick: () => marcarRecebido(x)
+          }));
+      })),
+      semParte ? hint(semParte + (semParte === 1 ? ' conta sem' : ' contas sem') + ' a parte ' + DA() + ' definida.', 'warn') : null);
   }
 
   // Por categoria (custo líquido)
   const cats = {};
   S.despesas.forEach(x => { const c = x.categoria || 'Sem categoria'; cats[c] = (cats[c] || 0) + custo(x); });
-  const lista = Object.keys(cats).map(c => [c, r2(cats[c])]).filter(c => c[1] > 0).sort((a, b) => b[1] - a[1]);
-  if (lista.length) {
-    const max = lista[0][1] || 1;
-    out.push(glabel('Para onde foi o teu dinheiro'), group(lista.map(([c, v]) => h('div', { class: 'catrow' },
+  const porCat = Object.keys(cats).map(c => [c, r2(cats[c])]).filter(c => c[1] > 0).sort((a, b) => b[1] - a[1]);
+  if (porCat.length) {
+    const max = porCat[0][1] || 1;
+    out.push(glabel('Para onde foi o teu dinheiro'), lista(porCat.map(([c, v]) => h('div', { class: 'catrow' },
       h('div', { class: 'cattop' }, h('span', { text: c }), h('span', { class: 'num gval', text: fmt(v) })),
-      h('div', { class: 'bar', style: 'width:' + Math.max(2, Math.round(v / max * 100)) + '%' })))));
+      h('div', { class: 'bar', 'aria-hidden': 'true', style: 'width:' + Math.max(2, Math.round(v / max * 100)) + '%' })))));
   }
 
   out.push(glabel('Próximos pagamentos'));
   if (S.proximos.length) {
-    out.push(group(S.proximos.map(x => h('div', { class: 'lrow' },
+    out.push(lista(S.proximos.map(x => h('div', { class: 'lrow' },
       h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
         h('div', { class: 'rsub', text: diaCurto(x.data_vencimento) + (x.partilhada ? ' · Partilhada' : '') })),
       h('div', { class: 'rval', text: fmt(x.valor) })))));
-  } else out.push(hint('Sem despesas fixas. Adiciona-as no separador Fixas.'));
+  } else out.push(vazio('Sem despesas fixas.', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
   return out;
 }
 
@@ -334,26 +388,29 @@ function linhaDespesa(x) {
 function viewDespesas() {
   const nRever = S.despesas.filter(porRever).length, nRec = S.despesas.filter(porReceber).length;
   const filtros = [['todas', 'Todos'], ['rever', 'Por rever' + (nRever ? ' (' + nRever + ')' : '')], ['partilhadas', 'Partilhados'], ['receber', 'A receber' + (nRec ? ' (' + nRec + ')' : '')]];
-  const out = [h('div', { class: 'chips scroll' }, filtros.map(([k, l]) => h('button', {
-    type: 'button', class: 'chip' + (S.filtro === k ? ' on' : ''), text: l, onclick: () => { S.filtro = k; render(); }
+  const out = [h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Filtrar gastos' }, filtros.map(([k, l]) => h('button', {
+    type: 'button', class: 'chip', text: l, 'aria-pressed': String(S.filtro === k),
+    onclick: () => { S.filtro = k; render(); const f = document.querySelector('.chips.scroll [aria-pressed="true"]'); if (f) f.focus(); }
   })))];
-  if (S.loading && !S.despesas.length) { out.push(vazio('A carregar…')); return out; }
-  const lista = S.despesas.filter(FILTROS[S.filtro]);
-  if (!lista.length) { out.push(vazio(S.filtro === 'rever' ? 'Nada por rever.' : 'Sem gastos em ' + mesMin(S.mes) + '.')); return out; }
-  out.push(hint(lista.length + (lista.length === 1 ? ' gasto · ' : ' gastos · ') + fmt(soma(lista, x => x.valor)) + ' · custo líquido ' + fmt(soma(lista, custo))));
-  let cur = null, g = null;
-  lista.forEach(x => {
-    if (x.data !== cur) { cur = x.data; out.push(glabel(diaLongo(cur))); g = group(); out.push(g); }
-    g.append(linhaDespesa(x));
-  });
+  if (S.loading && !S.despesas.length) { out.push(...carregando()); return out; }
+  const sel = S.despesas.filter(FILTROS[S.filtro]);
+  if (!sel.length) {
+    if (S.filtro !== 'todas' && S.despesas.length) out.push(vazio(S.filtro === 'rever' ? 'Nada por rever.' : 'Nada neste filtro.', 'Ver todos', () => { S.filtro = 'todas'; render(); }));
+    else out.push(vazio('Sem gastos em ' + mesMin(S.mes) + '.', 'Registar gasto', () => abrirDespesa()));
+    return out;
+  }
+  out.push(hint(sel.length + (sel.length === 1 ? ' gasto · ' : ' gastos · ') + fmt(soma(sel, x => x.valor)) + ' · custo líquido ' + fmt(soma(sel, custo))));
+  const porDia = [];
+  sel.forEach(x => { const u = porDia[porDia.length - 1]; if (u && u.data === x.data) u.itens.push(x); else porDia.push({ data: x.data, itens: [x] }); });
+  porDia.forEach(d => out.push(glabel(diaLongo(d.data)), lista(d.itens.map(linhaDespesa))));
   return out;
 }
 
 function viewGanhos() {
-  if (S.loading && !S.ganhos.length) return [vazio('A carregar…')];
-  if (!S.ganhos.length) return [vazio('Sem ganhos em ' + mesMin(S.mes) + '. Toca em + para registar o salário.')];
+  if (S.loading && !S.ganhos.length) return carregando();
+  if (!S.ganhos.length) return [vazio('Sem ganhos em ' + mesMin(S.mes) + '.', 'Registar ganho', () => abrirGanho())];
   const out = [glabel('Total de ' + mesMin(S.mes)), group(h('div', { class: 'hero' }, h('div', { class: 'big pos', text: fmt(soma(S.ganhos, x => x.valor)) })))];
-  out.push(glabel('Lançamentos'), group(S.ganhos.map(x => h('button', { type: 'button', class: 'lrow', onclick: () => abrirGanho(x) },
+  out.push(glabel('Lançamentos'), lista(S.ganhos.map(x => h('button', { type: 'button', class: 'lrow', onclick: () => abrirGanho(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.descricao || x.categoria || 'Ganho' }),
       h('div', { class: 'rsub', text: [diaCurto(x.data), x.categoria].filter(Boolean).join(' · ') })),
@@ -376,7 +433,8 @@ function viewCalcular() {
   const inEla = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.ela, 'aria-label': 'Rendimento ' + DA() });
   const kEu = h('div', { class: 'k' }), kEla = h('div', { class: 'k' });
   const rEu = h('div', { class: 'big', 'data-r': 'eu' }), rEla = h('div', { class: 'big', 'data-r': 'ela' });
-  const reg = h('button', { class: 'btn primary', type: 'button', text: 'Registar como gasto partilhado' });
+  const porque = h('p', { class: 'hint', id: 'calc-porque' });
+  const reg = h('button', { class: 'btn primary', type: 'button', text: 'Registar como gasto partilhado', 'aria-describedby': 'calc-porque' });
   let s = null;
   function upd() {
     S.calc.valor = inV.value; S.calc.eu = inEu.value; S.calc.ela = inEla.value;
@@ -388,6 +446,9 @@ function viewCalcular() {
     rEu.textContent = s ? fmt(s.eu) : '—';
     rEla.textContent = s ? fmt(s.ela) : '—';
     reg.disabled = !s;
+    // botão desativado explica porquê
+    porque.textContent = s ? 'Ao registar, o gasto entra pelo total e a parte ' + DA() + ' fica a receber.'
+      : 'Indica o valor da conta e os dois rendimentos para poder registar.';
   }
   [inV, inEu, inEla].forEach(i => i.addEventListener('input', upd));
   inEu.addEventListener('change', () => { const v = parseNum(inEu.value); if (v === null || (ok(v) && v >= 0)) guardarConfig({ calc_eu: v }, true); });
@@ -402,7 +463,7 @@ function viewCalcular() {
     group(grow('Eu', inEu), grow(ELA(), inEla)),
     hint('A divisão é proporcional ao que cada um ganha. Os rendimentos ficam guardados para a próxima vez.'),
     reg,
-    hint('Ao registar, o gasto entra pelo total e a parte ' + DA() + ' fica a receber.')
+    porque
   ];
 }
 
@@ -416,8 +477,8 @@ function viewFixas() {
     partesDela > 0 ? kv('O teu custo fixo', fmt(r2(total - partesDela))) : null
   )];
   out.push(glabel('Despesas fixas'));
-  if (!S.fixas.length) { out.push(hint('Ainda não tens fixas. Toca em + para adicionar o crédito, a água, o ginásio…')); return out; }
-  out.push(group(S.fixas.map(x => h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
+  if (!S.fixas.length) { out.push(vazio('Ainda não tens despesas fixas: crédito, água, ginásio…', 'Adicionar despesa fixa', () => abrirFixa())); return out; }
+  out.push(lista(S.fixas.map(x => h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.nome }),
       h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.categoria,
@@ -440,7 +501,7 @@ function viewAjustes() {
   const nome = h('input', { class: 'ginput', type: 'text', placeholder: 'Bia', maxlength: '40', value: c.nome_ela || '', autocapitalize: 'words', 'aria-label': 'Nome dela' });
   nome.addEventListener('keydown', e => { if (e.key === 'Enter') nome.blur(); });
   nome.addEventListener('change', () => guardarConfig({ nome_ela: nome.value.trim() || null }));
-  const sw = h('input', { type: 'checkbox', class: 'switch', checked: !!c.apple_pay_partilhada_default, 'aria-label': 'Apple Pay entra como partilhado' });
+  const sw = h('input', { type: 'checkbox', role: 'switch', class: 'switch', checked: !!c.apple_pay_partilhada_default, 'aria-label': 'Novos gastos Apple Pay são partilhados' });
   sw.addEventListener('change', () => guardarConfig({ apple_pay_partilhada_default: sw.checked }));
   const url = SUPABASE_URL + '/rest/v1/rpc/registar_apple_pay';
   const tk = c.token_atalho || '';
@@ -475,15 +536,17 @@ function viewAjustes() {
 }
 
 // ===================== Folhas de edição =====================
+const interruptor = (checked, label) => h('input', { type: 'checkbox', role: 'switch', class: 'switch', checked: !!checked, 'aria-label': label });
+
 function blocoPartilha(st, valorInput, comRecebido) {
   // Liga/desliga partilha + parte dela (+ já recebi)
-  const sw = h('input', { type: 'checkbox', class: 'switch', checked: st.partilhada, 'aria-label': 'Partilhada' });
+  const sw = interruptor(st.partilhada, 'Partilhada');
   const inParte = campoValor(st.parte_dela, 'Parte ' + DA(), { placeholder: 'quanto paga' });
-  const metade = h('button', { type: 'button', class: 'link small2', text: 'Metade' });
-  const swRec = h('input', { type: 'checkbox', class: 'switch', checked: !!st.recebido, 'aria-label': 'Já recebi' });
+  const metade = h('button', { type: 'button', class: 'link small2', text: 'Metade', 'aria-label': 'Metade do valor como parte ' + DA() });
+  const swRec = interruptor(st.recebido, 'Já recebi');
   const rowParte = grow('Parte ' + DA(), h('div', { class: 'inline' }, inParte, metade));
   const rowRec = comRecebido ? grow('Já recebi', swRec) : null;
-  const info = h('div', { class: 'split' });
+  const info = h('div', { class: 'split', 'aria-live': 'polite' });
   function draw() {
     rowParte.hidden = !st.partilhada;
     if (rowRec) rowRec.hidden = !st.partilhada;
@@ -500,13 +563,26 @@ function blocoPartilha(st, valorInput, comRecebido) {
   draw();
   return {
     info: info,
-    group: group(grow(comRecebido ? 'Partilhada com ' + ELA() : 'Partilhada com ' + ELA(), sw), rowParte, rowRec),
+    campo: inParte,
+    group: group(grow('Partilhada com ' + ELA(), sw), rowParte, rowRec),
     ler: () => {
       if (!st.partilhada) return { partilhada: false, parte_dela: null, recebido: false };
       const p = parseNum(inParte.value);
       return { partilhada: true, parte_dela: ok(p) ? p : null, recebido: comRecebido ? !!st.recebido : false, invalido: p !== null && (!ok(p) || p < 0) };
     }
   };
+}
+// Validações comuns: devolvem a mensagem de erro (ou null)
+function validarValor(s, campo) {
+  const v = parseNum(campo.value);
+  if (!ok(v) || v <= 0) { s.erro('Indica um valor maior que zero.', campo); return null; }
+  return v;
+}
+function validarPartilha(s, part, v) {
+  const p = part.ler();
+  if (p.invalido) { s.erro('A parte ' + DA() + ' tem de ser um valor válido.', part.campo); return null; }
+  if (p.parte_dela != null && p.parte_dela > v) { s.erro('A parte ' + DA() + ' não pode ser maior que o total.', part.campo); return null; }
+  return p;
 }
 
 function abrirDespesa(x, preset) {
@@ -518,38 +594,36 @@ function abrirDespesa(x, preset) {
     recebido: x ? !!x.recebido : false
   };
   const dataDefault = S.mes === mesAtual() ? hojeISO() : S.mes;
-  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor',
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor', 'aria-required': 'true',
     value: x ? toInput(x.valor) : (ok(preset.valor) ? toInput(preset.valor) : '') });
   const desc = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', 'aria-label': 'Descrição',
     placeholder: x && x.comerciante ? x.comerciante : 'Ex.: Jantar', value: x ? (x.descricao || '') : '' });
-  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : dataDefault, 'aria-label': 'Data' });
+  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : dataDefault, 'aria-label': 'Data', 'aria-required': 'true' });
   const part = blocoPartilha(st, valor, true);
 
   let origem = null;
   if (x && x.origem === 'apple_pay') origem = ['Apple Pay', x.cartao, x.comerciante].filter(Boolean).join(' · ');
   if (x && x.origem === 'recorrente') origem = 'Lançado a partir de uma despesa fixa';
+  const titulo = x ? (x.descricao || x.comerciante || 'Sem descrição') : '';
 
   let s;
   const conteudo = [
     valor, part.info,
     origem ? hint(origem, 'center') : null,
     group(grow('Descrição', desc), grow('Data', data)),
-    glabel('Categoria'),
+    glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
     part.group,
     x && x.origem === 'apple_pay' && x.comerciante ? h('p', { class: 'hint', style: 'margin-top:-10px', text: 'A categoria e a partilha ficam memorizadas para «' + x.comerciante + '».' }) : null,
-    novo ? null : botaoApagar('Apagar gasto', async () => {
+    novo ? null : botaoApagar('Apagar gasto', 'Apagar este gasto?', '«' + titulo + '» · ' + fmt(x.valor) + '. Não dá para desfazer.', async () => {
       await q(sb.from('despesas').delete().eq('id', x.id));
       s.fechar(); await recarregar(); toast('Gasto apagado');
-    })
+    }, () => s)
   ];
   s = sheet(novo ? 'Novo gasto' : 'Editar gasto', conteudo, async () => {
-    const v = parseNum(valor.value);
-    if (!ok(v) || v <= 0) { toast('Indica um valor maior que zero.', true); valor.focus(); return false; }
-    if (!data.value) { toast('Indica a data.', true); return false; }
-    const p = part.ler();
-    if (p.invalido) { toast('Parte ' + DA() + ' inválida.', true); return false; }
-    if (p.parte_dela != null && p.parte_dela > v) { toast('A parte ' + DA() + ' não pode ser maior que o total.', true); return false; }
+    const v = validarValor(s, valor); if (v === null) return false;
+    if (!data.value) return s.erro('Indica a data.', data);
+    const p = validarPartilha(s, part, v); if (!p) return false;
     const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria,
       partilhada: p.partilhada, parte_dela: p.parte_dela, recebido: p.recebido };
     if (novo) await q(sb.from('despesas').insert(payload));
@@ -558,29 +632,28 @@ function abrirDespesa(x, preset) {
     await recarregar();
     toast(mesD === S.mes ? 'Guardado' : 'Guardado em ' + nomeMes(mesD));
   });
-  if (novo && !ok(preset.valor)) setTimeout(() => valor.focus(), 260);
+  if (novo && !ok(preset.valor)) valor.focus();
 }
 
 function abrirGanho(x) {
   const novo = !x;
   const st = { categoria: x ? x.categoria : 'Salário' };
-  const valor = h('input', { class: 'valorin pos', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor do ganho', value: x ? toInput(x.valor) : '' });
+  const valor = h('input', { class: 'valorin pos', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor do ganho', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
   const desc = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Salário de novembro', 'aria-label': 'Descrição', value: x ? (x.descricao || '') : '' });
-  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : (S.mes === mesAtual() ? hojeISO() : S.mes), 'aria-label': 'Data' });
+  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : (S.mes === mesAtual() ? hojeISO() : S.mes), 'aria-label': 'Data', 'aria-required': 'true' });
   let s;
   s = sheet(novo ? 'Novo ganho' : 'Editar ganho', [
     valor, h('div', { class: 'split', text: 'líquido' }),
     group(grow('Descrição', desc), grow('Data', data)),
-    glabel('Tipo'),
-    group(h('div', { class: 'pad' }, chips(CAT_GANHOS, st))),
-    novo ? null : botaoApagar('Apagar ganho', async () => {
+    glabel('Tipo', 'h3'),
+    group(h('div', { class: 'pad' }, chips(CAT_GANHOS, st, 'Tipo de ganho'))),
+    novo ? null : botaoApagar('Apagar ganho', 'Apagar este ganho?', '«' + (x.descricao || x.categoria || 'Ganho') + '» · ' + fmt(x.valor) + '. Não dá para desfazer.', async () => {
       await q(sb.from('ganhos').delete().eq('id', x.id));
       s.fechar(); await recarregar(); toast('Ganho apagado');
-    })
+    }, () => s)
   ], async () => {
-    const v = parseNum(valor.value);
-    if (!ok(v) || v <= 0) { toast('Indica um valor maior que zero.', true); valor.focus(); return false; }
-    if (!data.value) { toast('Indica a data.', true); return false; }
+    const v = validarValor(s, valor); if (v === null) return false;
+    if (!data.value) return s.erro('Indica a data.', data);
     const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria };
     if (novo) await q(sb.from('ganhos').insert(payload));
     else await q(sb.from('ganhos').update(payload).eq('id', x.id));
@@ -589,40 +662,39 @@ function abrirGanho(x) {
     await recarregar();
     toast(mesG === S.mes ? 'Ganho guardado' : 'Guardado em ' + nomeMes(mesG));
   });
-  if (novo) setTimeout(() => valor.focus(), 260);
+  if (novo) valor.focus();
 }
 
 function abrirFixa(x) {
   const novo = !x;
   const st = { categoria: x ? x.categoria : null, partilhada: x ? !!x.partilhada : false, parte_dela: x ? x.parte_dela : null, ativa: x ? !!x.ativa : true };
-  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', value: x ? toInput(x.valor) : '' });
-  const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', value: x ? x.nome : '' });
-  const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', value: x ? String(x.dia_vencimento) : '' });
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
+  const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
+  const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', 'aria-required': 'true', value: x ? String(x.dia_vencimento) : '' });
   const part = blocoPartilha(st, valor, false);
-  const swAtiva = h('input', { type: 'checkbox', class: 'switch', checked: st.ativa, 'aria-label': 'Ativa' });
+  const swAtiva = interruptor(st.ativa, 'Ativa');
   swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
   let s;
   const conteudo = [
     valor, part.info, h('div', { class: 'split', text: 'por mês' }),
     group(grow('Nome', nome), grow('Dia do pagamento', dia)),
-    glabel('Categoria'),
+    glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
     part.group,
     novo ? null : group(grow('Ativa', swAtiva)),
     h('p', { class: 'hint', style: 'margin-top:-10px', text: 'Entra sozinha em Gastos todos os meses. Se for partilhada, a parte ' + DA() + ' fica a receber até marcares que recebeste.' }),
-    novo ? null : botaoApagar('Apagar despesa fixa', async () => {
+    novo ? null : botaoApagar('Apagar despesa fixa', 'Apagar «' + x.nome + '»?', 'Deixa de entrar nos próximos meses. Os meses já lançados mantêm-se.', async () => {
       await q(sb.from('despesas_recorrentes').delete().eq('id', x.id));
-      s.fechar(); await carregarFixas(); await recarregar(); toast('Fixa apagada · os meses já lançados mantêm-se');
-    })
+      s.fechar(); await carregarFixas(); await recarregar(); toast('Fixa apagada');
+    }, () => s)
   ];
   s = sheet(novo ? 'Nova despesa fixa' : 'Editar despesa fixa', conteudo, async () => {
-    const v = parseNum(valor.value), d = parseInt(dia.value, 10), n = nome.value.trim();
-    if (!n) { toast('Dá um nome à despesa.', true); nome.focus(); return false; }
-    if (!ok(v) || v <= 0) { toast('Indica um valor maior que zero.', true); valor.focus(); return false; }
-    if (!(d >= 1 && d <= 31)) { toast('O dia tem de ser entre 1 e 31.', true); dia.focus(); return false; }
-    const p = part.ler();
-    if (p.invalido) { toast('Parte ' + DA() + ' inválida.', true); return false; }
-    if (p.parte_dela != null && p.parte_dela > v) { toast('A parte ' + DA() + ' não pode ser maior que o total.', true); return false; }
+    const v = validarValor(s, valor); if (v === null) return false;
+    const n = nome.value.trim();
+    if (!n) return s.erro('Dá um nome à despesa.', nome);
+    const d = parseInt(dia.value, 10);
+    if (!(d >= 1 && d <= 31)) return s.erro('O dia tem de ser entre 1 e 31.', dia);
+    const p = validarPartilha(s, part, v); if (!p) return false;
     const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa };
     const m = mesAtual();
     if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
@@ -639,7 +711,7 @@ function abrirFixa(x) {
     await recarregar();
     toast(novo ? 'Fixa criada · já entrou em ' + mesMin(m) : 'Fixa atualizada');
   });
-  if (novo) setTimeout(() => valor.focus(), 260);
+  if (novo) valor.focus();
 }
 
 // ===================== Estrutura =====================
@@ -675,7 +747,7 @@ function render() {
   const header = h('header', { class: 'top' },
     h('div', { class: 'toprow' }, h('h1', { text: TITULOS[S.tab] }), botoes),
     (S.tab === 'mes' || S.tab === 'despesas' || S.tab === 'ganhos') ? mesNav() : null);
-  const main = h('main', null, views[S.tab]());
+  const main = h('main', { 'aria-busy': S.loading ? 'true' : 'false' }, views[S.tab]());
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Separadores' }, TABS.map(t => h('button', {
     type: 'button', class: 'tab' + (S.tab === t ? ' on' : ''), 'aria-current': S.tab === t ? 'page' : null, onclick: () => irPara(t)
   }, icon(ICONS[t]), h('span', { text: TITULOS[t] }))));
@@ -683,23 +755,33 @@ function render() {
 }
 
 function renderLogin() {
-  document.querySelectorAll('.backdrop').forEach(b => b.remove());
+  document.querySelectorAll('dialog').forEach(d => d.remove());
   document.body.classList.remove('noscroll');
   const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', placeholder: 'Email', 'aria-label': 'Email', required: true });
   const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
+  const lerr = h('p', { class: 'lerr', id: 'login-erro', role: 'alert', hidden: true });
   const btn = h('button', { class: 'btn primary', type: 'submit', text: 'Entrar' });
-  const form = h('form', { class: 'login' },
-    h('div', { class: 'logo', text: 'GPP' }), h('h1', { text: 'GPP Dashboard' }), h('p', { text: 'Os teus gastos e ganhos, num só sítio.' }),
-    email, pass, btn);
+  const form = h('form', { class: 'login', 'aria-labelledby': 'login-t' },
+    h('div', { class: 'logo', 'aria-hidden': 'true', text: 'GPP' }), h('h1', { id: 'login-t', text: 'GPP Dashboard' }), h('p', { text: 'Os teus gastos e ganhos, num só sítio.' }),
+    email, pass, lerr, btn);
+  const limpar = () => { lerr.hidden = true; [email, pass].forEach(i => { i.removeAttribute('aria-invalid'); i.removeAttribute('aria-describedby'); }); };
+  form.addEventListener('input', limpar);
   form.addEventListener('submit', async e => {
     e.preventDefault();
+    limpar();
     btn.disabled = true; btn.textContent = 'A entrar…';
     const r = await sb.auth.signInWithPassword({ email: email.value.trim(), password: pass.value });
     btn.disabled = false; btn.textContent = 'Entrar';
-    if (r.error) { erro(r.error); return; }
+    if (r.error) {
+      console.error(r.error);
+      lerr.textContent = traduzErro(r.error); lerr.hidden = false;
+      [email, pass].forEach(i => { i.setAttribute('aria-invalid', 'true'); i.setAttribute('aria-describedby', 'login-erro'); });
+      pass.focus();
+      return;
+    }
     await entrar(r.data.user);
   });
-  app.replaceChildren(form);
+  app.replaceChildren(h('main', null, form));
 }
 
 async function entrar(user) {
@@ -707,7 +789,7 @@ async function entrar(user) {
   S.mes = mesAtual();
   S.tab = 'mes';
   S.despesas = []; S.ganhos = [];
-  app.replaceChildren(vazio('A carregar…'));
+  app.replaceChildren(h('main', { 'aria-busy': 'true' }, carregando()));
   try { S.config = await q(sb.rpc('garantir_config')); }
   catch (e) { erro(e); S.config = {}; }
   render();
