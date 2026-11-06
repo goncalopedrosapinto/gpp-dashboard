@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.5 · nov 2026';
+const VERSAO = 'v1.6 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -41,6 +41,7 @@ function h(tag, props) {
     }
   }
   for (let i = 2; i < arguments.length; i++) append(el, arguments[i]);
+  if (tag === 'input' && !el.hasAttribute('enterkeyhint')) el.setAttribute('enterkeyhint', 'done');
   return el;
 }
 function append(el, kid) {
@@ -370,9 +371,11 @@ function viewMes() {
 
   out.push(glabel('Próximos pagamentos'));
   if (S.proximos.length) {
-    out.push(lista(S.proximos.map(x => h('div', { class: 'lrow' },
+    const avisos = avisosSaldo(S.proximos);
+    out.push(lista(S.proximos.map((x, i) => h('div', { class: 'lrow' },
       h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
-        h('div', { class: 'rsub', text: diaCurto(x.data_vencimento) + (x.partilhada ? ' · Partilhada' : '') })),
+        h('div', { class: 'rsub' + (avisos[i] ? ' warn' : ''), text: [diaCurto(x.data_vencimento), x.debito_direto ? 'Débito direto' : null,
+          x.partilhada ? 'Partilhada' : null, avisos[i]].filter(Boolean).join(' · ') })),
       h('div', { class: 'rval', text: fmt(x.valor) })))));
     out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Gerir despesas fixas', onclick: () => irPara('fixas') })));
   } else out.push(vazio('Sem despesas fixas.', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
@@ -490,7 +493,7 @@ function viewFixas() {
   out.push(lista(S.fixas.map(x => h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.nome }),
-      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.categoria,
+      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.debito_direto ? 'Débito direto' : null, S.contas.length > 1 ? nomeConta(x.conta_id) : null,
         x.partilhada ? (x.parte_dela != null ? ELA() + ' paga ' + fmt(x.parte_dela) : 'Partilhada') : null,
         x.ativa ? null : 'Pausada'].filter(Boolean).join(' · ') })),
     h('div', { class: 'rval', text: fmt(x.valor) }),
@@ -686,13 +689,19 @@ function abrirFixa(x) {
   const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
   const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
   const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', 'aria-required': 'true', value: x ? String(x.dia_vencimento) : '' });
+  const swDeb = interruptor(x ? x.debito_direto : false, 'Débito direto');
+  const rDia = grow('Dia do pagamento', dia);
+  const drawDeb = () => { const t = swDeb.checked ? 'Dia do débito' : 'Dia do pagamento'; rDia.firstChild.textContent = t; dia.setAttribute('aria-label', t); };
+  swDeb.addEventListener('change', drawDeb); drawDeb();
+  const contaSel = seletorConta(x ? x.conta_id : null);
   const part = blocoPartilha(st, valor, false);
   const swAtiva = interruptor(st.ativa, 'Ativa');
   swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
   let s;
   const conteudo = [
     valor, part.info, h('div', { class: 'split', text: 'por mês' }),
-    group(grow('Nome', nome), grow('Dia do pagamento', dia)),
+    group(grow('Nome', nome), grow('Débito direto', swDeb), rDia, contaSel ? contaSel.row : null),
+    h('p', { class: 'hint', style: 'margin:-10px 16px 18px', text: 'Com débito direto o banco cobra sozinho nesse dia: a agenda avisa-te na véspera para confirmares o saldo.' }),
     glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
     part.group,
@@ -710,16 +719,17 @@ function abrirFixa(x) {
     const d = parseInt(dia.value, 10);
     if (!(d >= 1 && d <= 31)) return s.erro('O dia tem de ser entre 1 e 31.', dia);
     const p = validarPartilha(s, part, v); if (!p) return false;
-    const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa };
+    const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa, debito_direto: swDeb.checked };
+    if (contaSel) payload.conta_id = contaSel.ler();
     const m = mesAtual();
     if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
     else {
       await q(sb.from('despesas_recorrentes').update(payload).eq('id', x.id));
       // atualiza o lançamento deste mês, se já existir (mantém o "recebido")
-      await q(sb.from('despesas').update({
-        valor: v, descricao: n, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela,
-        data: m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m)))
-      }).eq('recorrente_id', x.id).eq('mes', m));
+      const atual = { valor: v, descricao: n, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela,
+        data: m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m))) };
+      if (contaSel) atual.conta_id = payload.conta_id;
+      await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m));
     }
     await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
     await carregarFixas();
@@ -732,6 +742,19 @@ function abrirFixa(x) {
 // ===================== Contas e saldos =====================
 const TIPOS_CONTA = { corrente: 'À ordem', poupanca: 'Poupança', outra: 'Outra' };
 const contaPrincipal = () => S.contas.find(c => c.principal) || null;
+const contaDe = id => (id != null && S.contas.find(c => c.conta_id === id)) || contaPrincipal();
+const nomeConta = id => { const c = contaDe(id); return c ? c.nome : null; };
+// Percorre os próximos pagamentos por data e avisa quando o saldo atual da conta deixa de chegar
+function avisosSaldo(proximos) {
+  if (!S.contas.length) return proximos.map(() => null);
+  const resto = {};
+  S.contas.forEach(c => { resto[c.conta_id] = Number(c.saldo_atual); });
+  return proximos.map(x => {
+    const c = contaDe(x.conta_id); if (!c) return null;
+    resto[c.conta_id] = r2(resto[c.conta_id] - Number(x.valor));
+    return resto[c.conta_id] < 0 ? 'Saldo atual da ' + c.nome + ' não chega' : null;
+  });
+}
 
 function selectConta(selecionada, label) {
   return h('select', { class: 'ginput', 'aria-label': label },
@@ -898,8 +921,8 @@ function linhaItemAgenda(it) {
     return h('button', { type: 'button', class: 'lrow', onclick: () => abrirFixa(f) },
       h('span', { class: 'barra ag-pag', 'aria-hidden': 'true' }),
       h('div', { class: 'rmain' },
-        h('div', { class: 'rtitle', text: 'Pagar ' + f.nome }),
-        h('div', { class: 'rsub', text: ['Pagamento', f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
+        h('div', { class: 'rtitle', text: (f.debito_direto ? 'Débito direto: ' : 'Pagar ') + f.nome }),
+        h('div', { class: 'rsub', text: [f.debito_direto ? 'Sai sozinho' : 'Pagamento', S.contas.length > 1 ? nomeConta(f.conta_id) : null, f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
       h('div', { class: 'rval', text: fmt(f.valor) }),
       h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
   }
@@ -1070,8 +1093,8 @@ function render() {
 function renderLogin() {
   document.querySelectorAll('dialog').forEach(d => d.remove());
   document.body.classList.remove('noscroll');
-  const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', placeholder: 'Email', 'aria-label': 'Email', required: true });
-  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
+  const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next', placeholder: 'Email', 'aria-label': 'Email', required: true });
+  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', enterkeyhint: 'go', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
   const lerr = h('p', { class: 'lerr', id: 'login-erro', role: 'alert', hidden: true });
   const btn = h('button', { class: 'btn primary', type: 'submit', text: 'Entrar' });
   const form = h('form', { class: 'login', 'aria-labelledby': 'login-t' },

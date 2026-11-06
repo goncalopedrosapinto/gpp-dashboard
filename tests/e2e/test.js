@@ -480,6 +480,58 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(href === 'webcal://klmjdjhvsxvopctgmhyu.supabase.co/functions/v1/calendario?t=' + tkCal + '&a=bia', 'Ajustes: link webcal da agenda Bia com o token');
   await page.click('button:has-text("Fechar")');
 
+
+  console.log('Débito direto');
+  await irFixas();
+  await page.click('.lrow:has-text("Água")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.check('.sheet [aria-label="Débito direto"]');
+  check(await page.$('.sheet [aria-label="Dia do débito"]') !== null, 'com débito direto o campo passa a "Dia do débito"');
+  await page.selectOption('.sheet [aria-label="Conta"]', { label: 'CGD à ordem' });
+  await guardar();
+  check(await tem('Dia 31 · Débito direto'), 'fixa mostra "Débito direto"');
+  const agua = (await bd("select debito_direto from despesas_recorrentes where nome = 'Água'"))[0];
+  check(agua.debito_direto === true, 'débito direto gravado na fixa');
+  await tab('Agenda');
+  await page.click('.cal-dia:has(.cal-num:text-is("30"))');
+  check(await tem('Débito direto: Água'), 'agenda mostra "Débito direto: Água" no dia 30');
+  await irFixas();
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor mensal"]', '99999');
+  await page.fill('.sheet [aria-label="Nome"]', 'Seguro carro');
+  await page.check('.sheet [aria-label="Débito direto"]');
+  await page.fill('.sheet [aria-label="Dia do débito"]', '29');
+  await page.click('.sheet .chip:has-text("Transportes")');
+  await guardar();
+  await tab('Resumo');
+  check(await tem('Saldo atual da CGD à ordem não chega'), 'Resumo avisa quando o saldo da conta não chega para um débito');
+  const segCarro = (await bd("select d.conta_id is null as principal from despesas d where d.descricao = 'Seguro carro'"))[0];
+  check(segCarro && segCarro.principal, 'lançamento do mês do débito sai da conta principal');
+  await page.evaluate(() => window.scrollTo(0, 99999)); await page.waitForTimeout(150);
+  await shot('16-aviso-saldo');
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  console.log('mobile-native');
+  const nativo = async () => page.evaluate(() => {
+    const cs = e => getComputedStyle(e);
+    const vp = document.querySelector('meta[name=viewport]').content;
+    return {
+      overscroll: cs(document.documentElement).overscrollBehaviorY === 'none',
+      touch: [...document.querySelectorAll('button')].every(b => cs(b).touchAction === 'manipulation'),
+      semSelecao: [...document.querySelectorAll('button')].every(b => (cs(b).userSelect || cs(b).webkitUserSelect) === 'none'),
+      fonte16: [...document.querySelectorAll('input, select, textarea')].every(i => parseFloat(cs(i).fontSize) >= 16),
+      enter: [...document.querySelectorAll('input:not([type=checkbox])')].every(i => i.getAttribute('enterkeyhint')),
+      viewport: vp.includes('viewport-fit=cover') && vp.includes('interactive-widget=resizes-content') && !/user-scalable|maximum-scale/.test(vp),
+      esquema: !!document.querySelector('meta[name=color-scheme]')
+    };
+  });
+  const n1 = await nativo();
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  const n2 = await nativo();
+  const folhaContida = await page.evaluate(() => getComputedStyle(document.querySelector('dialog.sheet')).overscrollBehaviorY === 'contain');
+  await page.keyboard.press('Escape'); await fechado();
+  const todos = Object.keys(n1).filter(k => !(n1[k] && n2[k]));
+  check(todos.length === 0 && folhaContida, 'mobile-native: overscroll, toque imediato, sem seleção nos botões, inputs ≥16px, tecla OK, viewport, esquema de cor' + (todos.length ? ' — falhou: ' + todos.join(', ') : ''));
+
   console.log('Editar e apagar');
   await irFixas();
   await page.click('.lrow:has-text("Ginásio")'); await page.waitForSelector('dialog.sheet[open]');

@@ -232,4 +232,27 @@ reset role; set role authenticated; set request.jwt.claim.sub = '22222222-2222-2
 do $$ begin if (select count(*) from eventos) <> 0 then raise exception 'T12 falhou: B ve eventos'; end if; end $$;
 reset role;
 
+
+-- ===== v1.6: débito direto =====
+set role authenticated;
+set request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+\echo '--- T13: debito direto e conta da fixa ---'
+insert into despesas_recorrentes (nome, valor, dia_vencimento, debito_direto, conta_id, inicio)
+values ('Seguro', 25, 2, true, current_setting('t.poup')::bigint, date_trunc('month', hoje_lisboa())::date);
+select gerar_recorrentes() as geradas;
+do $$ declare j jsonb; begin
+  if (select conta_id from despesas where descricao = 'Seguro') <> current_setting('t.poup')::bigint then raise exception 'T13 falhou: gasto gerado sem a conta da fixa'; end if;
+  if not exists (select 1 from proximos_pagamentos where nome = 'Renda' and conta_id = current_setting('t.cgd')::bigint) then raise exception 'T13 falhou: proximos sem conta principal'; end if;
+end $$;
+reset role; set role anon; reset request.jwt.claim.sub;
+do $$ declare j jsonb; s jsonb; r jsonb; begin
+  j := calendario_dados(current_setting('t.tkcal'), 'pagamentos');
+  select x into s from jsonb_array_elements(j->'pagamentos') x where x->>'nome' = 'Seguro' limit 1;
+  select x into r from jsonb_array_elements(j->'pagamentos') x where x->>'nome' = 'Renda' limit 1;
+  if not (s->>'debito_direto')::boolean or s->>'conta' <> 'Poupança' then raise exception 'T13 falhou: feed seguro %', s; end if;
+  if (r->>'debito_direto')::boolean or r->>'conta' <> 'CGD' then raise exception 'T13 falhou: feed renda %', r; end if;
+  raise notice 'debito direto e conta: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

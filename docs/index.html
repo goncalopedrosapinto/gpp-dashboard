@@ -2,7 +2,8 @@
 <html lang="pt-PT">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -42,7 +43,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);
 body{min-height:100dvh}
 body.noscroll{overflow:hidden}
 button{font-family:inherit;cursor:pointer}
-input{font-family:inherit}
+input,select,textarea{font-family:inherit;font-size:16px} /* abaixo de 16px o iPhone faz zoom ao focar */
 h1,h2,h3,.stitle{text-wrap:balance}
 p,.hint{text-wrap:pretty}
 .num{font-variant-numeric:tabular-nums}
@@ -57,14 +58,13 @@ p,.hint{text-wrap:pretty}
 .lrow:focus-visible{outline-offset:-2px}
 
 /* Cabeçalho */
-.top{position:sticky;top:0;z-index:var(--z-header);padding:calc(env(safe-area-inset-top) + 12px) 16px 8px;
+.top{position:sticky;top:0;z-index:var(--z-header);padding:calc(env(safe-area-inset-top, 0px) + 12px) 16px 8px;
   background:color-mix(in srgb,var(--bg) 86%,transparent);
   -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px)}
 .top h1{font-size:34px;font-weight:700;margin:0;line-height:1.15}
 .toprow{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .acts{display:flex;align-items:center;gap:10px}
 .addbtn{flex:none;width:38px;height:38px;border-radius:19px;border:0;background:var(--accent);color:var(--on-accent);font-size:26px;line-height:38px;padding:0 0 2px;box-shadow:var(--shadow)}
-.addbtn:active{opacity:.7}
 .gearbtn{flex:none;width:38px;height:38px;border-radius:19px;border:0;background:var(--chip);color:var(--accent);display:grid;place-items:center;padding:0}
 .gearbtn svg{width:20px;height:20px}
 .mesnav{display:flex;align-items:center;gap:2px;margin-top:4px}
@@ -81,7 +81,7 @@ select.ginput{-webkit-appearance:none;appearance:none;text-align:right;text-alig
 .rval.neg,.big.neg{color:var(--neg)}
 .link:disabled{opacity:.4}
 
-main{max-width:640px;margin:0 auto;padding:0 16px calc(104px + env(safe-area-inset-bottom))}
+main{max-width:640px;margin:0 auto;padding:0 16px calc(104px + env(safe-area-inset-bottom, 0px))}
 
 /* Secções agrupadas, estilo iOS */
 .glabel{font-size:13px;font-weight:400;color:var(--muted);text-transform:uppercase;margin:22px 16px 7px}
@@ -130,7 +130,6 @@ button.lrow:active{background:var(--press)}
 .rval.pos{color:var(--pos)}
 .chev{color:var(--muted);opacity:.5;font-size:20px;margin-left:-4px}
 .mini{flex:none;border:0;background:var(--accent);color:var(--on-accent);font-weight:600;font-size:14px;padding:6px 12px;border-radius:14px}
-.mini:active{opacity:.6}
 .linkrow{flex:1;min-width:0;background:none;border:0;padding:0;text-align:left;color:inherit;font:inherit}
 .catrow{padding:10px 16px}
 .cattop{display:flex;justify-content:space-between;gap:12px}
@@ -172,7 +171,7 @@ ol.steps b{font-weight:600}
 
 /* Barra de separadores */
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:var(--z-tabbar);display:grid;grid-template-columns:repeat(5,1fr);
-  padding:6px 0 calc(env(safe-area-inset-bottom) + 4px);border-top:.5px solid var(--line);
+  padding:6px 0 calc(env(safe-area-inset-bottom, 0px) + 4px);border-top:.5px solid var(--line);
   background:color-mix(in srgb,var(--card) 88%,transparent);
   -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px)}
 .tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;font-weight:500;color:var(--muted);background:none;border:0;padding:3px 0}
@@ -183,7 +182,7 @@ ol.steps b{font-weight:600}
 dialog.sheet{position:fixed;inset:auto 0 0 0;margin:0 auto;width:100%;max-width:640px;max-height:92dvh;padding:0;border:0;
   border-radius:14px 14px 0 0;background:var(--bg);color:var(--text);overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:var(--shadow-lg)}
 dialog.sheet::backdrop,dialog.alert::backdrop{background:rgb(0 0 0 / .4)}
-.sheet-in{padding:6px 16px calc(env(safe-area-inset-bottom) + 20px)}
+.sheet-in{padding:6px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)}
 .grab{width:36px;height:5px;border-radius:3px;background:var(--line);margin:2px auto 4px}
 .snav{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;margin-bottom:4px}
 .snav .link:first-child{justify-self:start}
@@ -202,7 +201,7 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 .acts2 .danger{background:var(--neg);color:#fff;font-weight:600}
 
 /* Entrada */
-.login{max-width:380px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 16vh) 24px 40px;display:flex;flex-direction:column;gap:12px}
+.login{max-width:380px;margin:0 auto;padding:calc(env(safe-area-inset-top, 0px) + 16vh) 24px 40px;display:flex;flex-direction:column;gap:12px}
 .login h1{font-size:30px;margin:6px 0 0}
 .login > p{margin:0 0 14px;color:var(--muted)}
 .logo{width:72px;height:72px;border-radius:18px;background:var(--accent);color:var(--on-accent);font-weight:800;font-size:23px;display:grid;place-items:center}
@@ -210,7 +209,7 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 .lfield[aria-invalid="true"]{box-shadow:0 0 0 2px var(--neg)}
 .lerr{color:var(--neg);font-size:15px;font-weight:600;margin:0}
 
-#toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));z-index:var(--z-toast);transform:translate(-50%,8px);
+#toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom, 0px));z-index:var(--z-toast);transform:translate(-50%,8px);
   max-width:calc(100% - 32px);padding:10px 16px;border-radius:20px;background:rgb(28 28 30 / .94);color:#fff;font-size:15px;
   opacity:0;pointer-events:none;transition:opacity .15s ease-out,transform .15s ease-out;text-align:center}
 #toast.show{opacity:1;transform:translate(-50%,0)}
@@ -239,6 +238,20 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 .barra{width:4px;align-self:stretch;border-radius:2px;background:var(--c);flex:none;margin:2px 0}
 input[type="time"].ginput,input[type="date"].ginput{min-height:34px}
 
+
+/* mobile-native (Emil Kowalski): o que separa um site de uma app instalada no iPhone */
+html,body{overscroll-behavior:none}                 /* sem "elástico" da página inteira */
+dialog.sheet{overscroll-behavior:contain}           /* a folha faz scroll sem arrastar a página */
+.chips.scroll{overscroll-behavior-x:contain}
+button,a,[role="button"],.chip,.tab,.cal-dia{       /* toque imediato; sem seleção nem menu ao manter premido */
+  touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.btn,.addbtn,.gearbtn,.mini,.chip,.cal-dia,.seg button,.acts2 button{transition:transform 100ms ease-out}
+.btn:active,.addbtn:active,.gearbtn:active,.mini:active,.chip:active,.cal-dia:active,.seg button:active,.acts2 button:active{transform:scale(0.97)}
+.btn:disabled:active{transform:none}
+.link:active,.navbtn:active,.tab:active{opacity:.6}
+.top,main{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.tabbar{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{transition:none !important;animation:none !important}
 }
@@ -255,7 +268,7 @@ input[type="time"].ginput,input[type="date"].ginput{min-height:34px}
 // ===================== Configura\u00e7\u00e3o =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.5 \u00b7 nov 2026';
+const VERSAO = 'v1.6 \u00b7 nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restaura\u00e7\u00e3o', 'Transportes', 'Sa\u00fade', 'Lazer', 'Compras', 'Subscri\u00e7\u00f5es', 'Outros'];
 const CAT_GANHOS = ['Sal\u00e1rio', 'Comiss\u00f5es', 'Pr\u00e9mios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -292,6 +305,7 @@ function h(tag, props) {
     }
   }
   for (let i = 2; i < arguments.length; i++) append(el, arguments[i]);
+  if (tag === 'input' && !el.hasAttribute('enterkeyhint')) el.setAttribute('enterkeyhint', 'done');
   return el;
 }
 function append(el, kid) {
@@ -621,9 +635,11 @@ function viewMes() {
 
   out.push(glabel('Pr\u00f3ximos pagamentos'));
   if (S.proximos.length) {
-    out.push(lista(S.proximos.map(x => h('div', { class: 'lrow' },
+    const avisos = avisosSaldo(S.proximos);
+    out.push(lista(S.proximos.map((x, i) => h('div', { class: 'lrow' },
       h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
-        h('div', { class: 'rsub', text: diaCurto(x.data_vencimento) + (x.partilhada ? ' \u00b7 Partilhada' : '') })),
+        h('div', { class: 'rsub' + (avisos[i] ? ' warn' : ''), text: [diaCurto(x.data_vencimento), x.debito_direto ? 'D\u00e9bito direto' : null,
+          x.partilhada ? 'Partilhada' : null, avisos[i]].filter(Boolean).join(' \u00b7 ') })),
       h('div', { class: 'rval', text: fmt(x.valor) })))));
     out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Gerir despesas fixas', onclick: () => irPara('fixas') })));
   } else out.push(vazio('Sem despesas fixas.', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
@@ -741,7 +757,7 @@ function viewFixas() {
   out.push(lista(S.fixas.map(x => h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.nome }),
-      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.categoria,
+      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.debito_direto ? 'D\u00e9bito direto' : null, S.contas.length > 1 ? nomeConta(x.conta_id) : null,
         x.partilhada ? (x.parte_dela != null ? ELA() + ' paga ' + fmt(x.parte_dela) : 'Partilhada') : null,
         x.ativa ? null : 'Pausada'].filter(Boolean).join(' \u00b7 ') })),
     h('div', { class: 'rval', text: fmt(x.valor) }),
@@ -937,13 +953,19 @@ function abrirFixa(x) {
   const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
   const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Gin\u00e1sio', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
   const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', 'aria-required': 'true', value: x ? String(x.dia_vencimento) : '' });
+  const swDeb = interruptor(x ? x.debito_direto : false, 'D\u00e9bito direto');
+  const rDia = grow('Dia do pagamento', dia);
+  const drawDeb = () => { const t = swDeb.checked ? 'Dia do d\u00e9bito' : 'Dia do pagamento'; rDia.firstChild.textContent = t; dia.setAttribute('aria-label', t); };
+  swDeb.addEventListener('change', drawDeb); drawDeb();
+  const contaSel = seletorConta(x ? x.conta_id : null);
   const part = blocoPartilha(st, valor, false);
   const swAtiva = interruptor(st.ativa, 'Ativa');
   swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
   let s;
   const conteudo = [
     valor, part.info, h('div', { class: 'split', text: 'por m\u00eas' }),
-    group(grow('Nome', nome), grow('Dia do pagamento', dia)),
+    group(grow('Nome', nome), grow('D\u00e9bito direto', swDeb), rDia, contaSel ? contaSel.row : null),
+    h('p', { class: 'hint', style: 'margin:-10px 16px 18px', text: 'Com d\u00e9bito direto o banco cobra sozinho nesse dia: a agenda avisa-te na v\u00e9spera para confirmares o saldo.' }),
     glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
     part.group,
@@ -961,16 +983,17 @@ function abrirFixa(x) {
     const d = parseInt(dia.value, 10);
     if (!(d >= 1 && d <= 31)) return s.erro('O dia tem de ser entre 1 e 31.', dia);
     const p = validarPartilha(s, part, v); if (!p) return false;
-    const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa };
+    const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa, debito_direto: swDeb.checked };
+    if (contaSel) payload.conta_id = contaSel.ler();
     const m = mesAtual();
     if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
     else {
       await q(sb.from('despesas_recorrentes').update(payload).eq('id', x.id));
       // atualiza o lan\u00e7amento deste m\u00eas, se j\u00e1 existir (mant\u00e9m o "recebido")
-      await q(sb.from('despesas').update({
-        valor: v, descricao: n, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela,
-        data: m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m)))
-      }).eq('recorrente_id', x.id).eq('mes', m));
+      const atual = { valor: v, descricao: n, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela,
+        data: m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m))) };
+      if (contaSel) atual.conta_id = payload.conta_id;
+      await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m));
     }
     await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
     await carregarFixas();
@@ -983,6 +1006,19 @@ function abrirFixa(x) {
 // ===================== Contas e saldos =====================
 const TIPOS_CONTA = { corrente: '\u00c0 ordem', poupanca: 'Poupan\u00e7a', outra: 'Outra' };
 const contaPrincipal = () => S.contas.find(c => c.principal) || null;
+const contaDe = id => (id != null && S.contas.find(c => c.conta_id === id)) || contaPrincipal();
+const nomeConta = id => { const c = contaDe(id); return c ? c.nome : null; };
+// Percorre os pr\u00f3ximos pagamentos por data e avisa quando o saldo atual da conta deixa de chegar
+function avisosSaldo(proximos) {
+  if (!S.contas.length) return proximos.map(() => null);
+  const resto = {};
+  S.contas.forEach(c => { resto[c.conta_id] = Number(c.saldo_atual); });
+  return proximos.map(x => {
+    const c = contaDe(x.conta_id); if (!c) return null;
+    resto[c.conta_id] = r2(resto[c.conta_id] - Number(x.valor));
+    return resto[c.conta_id] < 0 ? 'Saldo atual da ' + c.nome + ' n\u00e3o chega' : null;
+  });
+}
 
 function selectConta(selecionada, label) {
   return h('select', { class: 'ginput', 'aria-label': label },
@@ -1149,8 +1185,8 @@ function linhaItemAgenda(it) {
     return h('button', { type: 'button', class: 'lrow', onclick: () => abrirFixa(f) },
       h('span', { class: 'barra ag-pag', 'aria-hidden': 'true' }),
       h('div', { class: 'rmain' },
-        h('div', { class: 'rtitle', text: 'Pagar ' + f.nome }),
-        h('div', { class: 'rsub', text: ['Pagamento', f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' \u00b7 ') })),
+        h('div', { class: 'rtitle', text: (f.debito_direto ? 'D\u00e9bito direto: ' : 'Pagar ') + f.nome }),
+        h('div', { class: 'rsub', text: [f.debito_direto ? 'Sai sozinho' : 'Pagamento', S.contas.length > 1 ? nomeConta(f.conta_id) : null, f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' \u00b7 ') })),
       h('div', { class: 'rval', text: fmt(f.valor) }),
       h('span', { class: 'chev', text: '\u203a', 'aria-hidden': 'true' }));
   }
@@ -1321,8 +1357,8 @@ function render() {
 function renderLogin() {
   document.querySelectorAll('dialog').forEach(d => d.remove());
   document.body.classList.remove('noscroll');
-  const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', placeholder: 'Email', 'aria-label': 'Email', required: true });
-  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
+  const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next', placeholder: 'Email', 'aria-label': 'Email', required: true });
+  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', enterkeyhint: 'go', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
   const lerr = h('p', { class: 'lerr', id: 'login-erro', role: 'alert', hidden: true });
   const btn = h('button', { class: 'btn primary', type: 'submit', text: 'Entrar' });
   const form = h('form', { class: 'login', 'aria-labelledby': 'login-t' },

@@ -33,7 +33,7 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 - **Resumo:** só os meus números. Saldo = ganhos − custo líquido; custo líquido = gastos (total pago) − o que a Bia já devolveu.
 - **Conta partilhada:** entra pelo total que paguei, com a parte da Bia. Fica *a receber* até marcar que recebi. O reembolso reduz o custo; não conta como ganho.
 - **Calculadora:** o único sítio com divisão proporcional ao rendimento líquido de cada um. Registar a partir dela preenche a parte da Bia.
-- **Despesas fixas:** geradas uma vez por mês, com a parte da Bia se for partilhada. Se apagar a do mês, não volta. Dia 31 passa para o último dia do mês.
+- **Despesas fixas:** geradas uma vez por mês, na conta escolhida (ou na principal), com a parte da Bia se for partilhada. Com débito direto, a agenda diz «Débito direto: X» e avisa na véspera de que conta sai; o Resumo avisa quando o saldo atual da conta não chega para os próximos pagamentos. Se apagar a do mês, não volta. Dia 31 passa para o último dia do mês.
 - **Contas:** o saldo de cada conta é o último ajuste ao valor real mais os movimentos posteriores (ganhos, gastos, o que a Bia devolve, transferências). Um ajuste no dia D já inclui tudo o que tem data anterior; do próprio dia só conta o que for registado depois. Gastos e ganhos sem conta escolhida vão para a principal.
 - **Agenda:** eventos próprios em quatro agendas (pessoal, trabalho, Bia, outro), com hora ou dia inteiro, repetição (semanal, mensal, anual) e alerta. Os pagamentos das despesas fixas aparecem sozinhos. O iPhone subscreve cada agenda em separado (`webcal://…/functions/v1/calendario?t=TOKEN&a=bia`), com a sua cor e os alertas; os pagamentos avisam às 9:00 da véspera.
 - **Apple Pay:** entra via Atalho do iPhone (`rpc/registar_apple_pay`, protegido por token pessoal). Corrigir a categoria/partilha de um comerciante memoriza a regra para os próximos gastos.
@@ -47,6 +47,7 @@ Segue o [ibelick/ui-skills](https://github.com/ibelick/ui-skills) (`baseline-ui`
 - Erros aparecem junto ao botão Guardar e o campo fica marcado (`aria-invalid`); os avisos rápidos só servem para sucesso.
 - Carregamento com esqueletos estáticos; estados vazios com uma ação.
 - Listas em `ul`/`li`, títulos `h1` → `h2` → `h3`, foco visível, contraste AA (verificado com axe-core no teste de ponta a ponta).
+- [mobile-native](https://github.com/emilkowalski/skills) (Emil Kowalski): sem elástico da página, toque imediato (`touch-action: manipulation`), sem seleção de texto nos controlos, feedback ao premir (`scale(0.97)`, 100 ms), inputs ≥16px, `interactive-widget=resizes-content`, `color-scheme`, margens seguras laterais.
 - Sem `letter-spacing`, sem gradientes, sem animações além de ≤150 ms em controlos; respeita `prefers-reduced-motion`.
 
 ## Segurança

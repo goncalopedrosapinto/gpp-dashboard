@@ -16,7 +16,7 @@ const dados = {
   ],
   pagamentos: [
     { id: 9, nome: 'Renda', valor: 600, partilhada: true, parte_dela: 300, data: '2026-12-01' },
-    { id: 10, nome: 'Água', valor: 40, partilhada: false, parte_dela: null, data: '2026-11-30' }
+    { id: 10, nome: 'Água', valor: 40, partilhada: false, parte_dela: null, data: '2026-11-30', debito_direto: true, conta: 'CGD à ordem' }
   ]
 };
 
@@ -36,6 +36,7 @@ check(tudo.includes('LOCATION:Aveiro\\, Rua Direita\\; 2.º') && tudo.includes('
 check(tudo.includes('TRIGGER:-PT30M') && tudo.includes('TRIGGER:-PT1440M'), 'alertas no tempo pedido');
 check(tudo.includes('SUMMARY:[Pagamentos] Pagar Renda · 600\\,00 €') && tudo.includes('TRIGGER:-PT15H'), 'pagamentos das fixas com aviso às 9:00 da véspera');
 check(tudo.includes('DESCRIPTION:Parte da Bia: 300\\,00 €'), 'pagamento partilhado mostra a parte da Bia');
+check(tudo.includes('SUMMARY:[Pagamentos] Débito direto: Água · 40\\,00 €') && tudo.includes('Amanhã sai o débito de Água (40\\,00 €) da CGD à ordem'), 'débito direto: título e aviso dizem de que conta sai');
 
 // Validação independente (parser Python)
 const dir = mkdtempSync(join(tmpdir(), 'ics-'));

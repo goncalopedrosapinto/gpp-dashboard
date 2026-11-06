@@ -1,0 +1,113 @@
+-- =====================================================================
+-- FINANÇAS GPP · v1.6 · Débito direto nas despesas fixas
+-- - debito_direto: o banco cobra sozinho no dia (não há nada a pagar à mão)
+-- - conta_id: de que conta sai (vazio = conta principal)
+-- Idempotente.
+-- =====================================================================
+
+alter table public.despesas_recorrentes
+  add column if not exists debito_direto boolean not null default false,
+  add column if not exists conta_id bigint references public.contas(id) on delete set null;
+create index if not exists recorrentes_conta_idx on public.despesas_recorrentes (conta_id);
+
+-- Os lançamentos do mês herdam a conta da fixa
+create or replace function public.gerar_recorrentes(p_mes date default public.hoje_lisboa())
+returns integer language plpgsql security invoker set search_path = '' as $$
+declare
+  m  date := date_trunc('month', p_mes::timestamp)::date;
+  ud int  := extract(day from (m + interval '1 month - 1 day'))::int;
+  n  int;
+begin
+  if m > date_trunc('month', public.hoje_lisboa()::timestamp)::date then
+    return 0;
+  end if;
+  with novos as (
+    insert into public.recorrentes_geradas (owner, recorrente_id, mes)
+    select r.owner, r.id, m
+    from public.despesas_recorrentes r
+    where r.owner = auth.uid()
+      and r.ativa
+      and r.inicio <= (m + interval '1 month - 1 day')::date
+      and (r.fim is null or r.fim >= m)
+    on conflict do nothing
+    returning recorrente_id
+  )
+  insert into public.despesas (owner, data, valor, descricao, categoria, partilhada, parte_dela, recebido, origem, recorrente_id, conta_id)
+  select r.owner, m + (least(r.dia_vencimento, ud) - 1), r.valor, r.nome, r.categoria,
+         r.partilhada, case when r.partilhada then r.parte_dela end, false, 'recorrente', r.id, r.conta_id
+  from public.despesas_recorrentes r
+  join novos n on n.recorrente_id = r.id;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+revoke execute on function public.gerar_recorrentes(date) from public, anon;
+grant  execute on function public.gerar_recorrentes(date) to authenticated;
+
+-- Próximos pagamentos passam a dizer se é débito direto e de que conta sai
+drop view if exists public.proximos_pagamentos;
+create view public.proximos_pagamentos with (security_invoker = true) as
+select r.id as recorrente_id, r.nome, r.valor, r.partilhada, r.categoria, r.debito_direto,
+       coalesce(r.conta_id, p.id) as conta_id,
+       (m.mes + (least(r.dia_vencimento, extract(day from (m.mes + interval '1 month - 1 day'))::int) - 1))::date as data_vencimento
+from public.despesas_recorrentes r
+left join public.contas p on p.owner = r.owner and p.principal
+cross join lateral (
+  select generate_series(date_trunc('month', public.hoje_lisboa()::timestamp),
+                         date_trunc('month', public.hoje_lisboa()::timestamp) + interval '2 months',
+                         interval '1 month')::date as mes
+) m
+where r.owner = auth.uid()
+  and r.ativa
+  and (m.mes + (least(r.dia_vencimento, extract(day from (m.mes + interval '1 month - 1 day'))::int) - 1))::date
+      between greatest(public.hoje_lisboa(), r.inicio) and coalesce(r.fim, 'infinity'::date);
+revoke all on public.proximos_pagamentos from anon;
+grant select on public.proximos_pagamentos to authenticated;
+
+-- Feed: pagamentos com débito direto e nome da conta
+create or replace function public.calendario_dados(token text, p_agenda text default null)
+returns jsonb language plpgsql stable security definer set search_path = '' as $$
+declare
+  v_owner uuid;
+  v_nome  text;
+  v_ev    jsonb := '[]'::jsonb;
+  v_pag   jsonb := '[]'::jsonb;
+begin
+  select c.owner, coalesce(nullif(trim(c.nome_ela), ''), 'Bia') into v_owner, v_nome
+  from public.config c where c.token_calendario = calendario_dados.token;
+  if v_owner is null then
+    raise exception 'token inválido' using errcode = '28000';
+  end if;
+  if p_agenda is not null and p_agenda not in ('pessoal', 'trabalho', 'bia', 'outro', 'pagamentos') then
+    raise exception 'agenda inválida';
+  end if;
+
+  if p_agenda is distinct from 'pagamentos' then
+    select coalesce(jsonb_agg(to_jsonb(e) - 'owner' order by e.data, e.hora_inicio), '[]'::jsonb) into v_ev
+    from public.eventos e
+    where e.owner = v_owner
+      and (p_agenda is null or e.agenda = p_agenda)
+      and (e.repete <> 'nunca' or e.data >= public.hoje_lisboa() - 90);
+  end if;
+
+  if p_agenda is null or p_agenda = 'pagamentos' then
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', r.id, 'nome', r.nome, 'valor', r.valor, 'partilhada', r.partilhada,
+             'parte_dela', r.parte_dela, 'debito_direto', r.debito_direto,
+             'conta', coalesce(c.nome, p.nome), 'data', x.data) order by x.data), '[]'::jsonb) into v_pag
+    from public.despesas_recorrentes r
+    left join public.contas c on c.id = r.conta_id
+    left join public.contas p on p.owner = r.owner and p.principal
+    cross join lateral (
+      select (m.mes + (least(r.dia_vencimento, extract(day from (m.mes + interval '1 month - 1 day'))::int) - 1))::date as data
+      from (select generate_series(date_trunc('month', public.hoje_lisboa()::timestamp),
+                                   date_trunc('month', public.hoje_lisboa()::timestamp) + interval '11 months',
+                                   interval '1 month')::date as mes) m
+    ) x
+    where r.owner = v_owner and r.ativa
+      and x.data >= r.inicio and (r.fim is null or x.data <= r.fim);
+  end if;
+
+  return jsonb_build_object('nome_ela', v_nome, 'eventos', v_ev, 'pagamentos', v_pag);
+end $$;
+revoke execute on function public.calendario_dados(text, text) from public, authenticated;
+grant execute on function public.calendario_dados(text, text) to anon;
