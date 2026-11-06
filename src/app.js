@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.8 · nov 2026';
+const VERSAO = 'v1.9 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -22,6 +22,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 const S = {
   user: null, config: null, tab: 'mes', mes: null, filtro: 'todas', loading: false, seq: 0,
   despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [], contas: [], eventos: [], transf: [], diaSel: null,
+  bloqueado: false, saiuEm: 0, avisoLogin: null,
   calc: { init: false, eu: '', ela: '', valor: '' }
 };
 
@@ -338,6 +339,20 @@ function viewMes() {
     kv('Custo líquido', fmt(custoLiq), 'strong')
   ), aVencer ? hint('Inclui despesas fixas que ainda vencem este mês.') : null);
 
+  // Fixas variáveis (água, luz…): entram com a estimativa até escreveres o valor da fatura
+  const estimados = S.despesas.filter(x => x.estimado).sort((a, b) => (a.data < b.data ? -1 : 1));
+  if (estimados.length) {
+    out.push(glabel('Faturas por confirmar'), lista(estimados.map(x => {
+      const t = x.descricao || 'Despesa fixa';
+      return h('div', { class: 'lrow' },
+        h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
+          h('div', { class: 'rtitle', text: t }),
+          h('div', { class: 'rsub', text: diaCurto(x.data) + ' · estimativa' })),
+        h('div', { class: 'rval', text: '≈ ' + fmt(x.valor) }),
+        h('button', { type: 'button', class: 'mini', text: 'Confirmar', 'aria-label': 'Confirmar valor: ' + t, onclick: () => abrirDespesa(x) }));
+    })), hint('Escreve o valor da fatura quando a receberes. Até lá, os saldos contam com a estimativa (média das últimas 3).'));
+  }
+
   // A receber (todos os meses)
   if (S.aReceber.length) {
     const total = soma(S.aReceber, parte);
@@ -381,29 +396,30 @@ function viewMes() {
       h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
         h('div', { class: 'rsub' + (avisos[i] ? ' warn' : ''), text: [diaCurto(x.data_vencimento), x.para_conta_id != null ? 'Para ' + nomeConta(x.para_conta_id) : null, x.debito_direto ? 'Débito direto' : null,
           x.partilhada ? 'Partilhada' : null, avisos[i]].filter(Boolean).join(' · ') })),
-      h('div', { class: 'rval', text: fmt(x.valor) })))));
+      h('div', { class: 'rval', text: (x.variavel ? '≈ ' : '') + fmt(x.valor) })))));
     out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Gerir despesas fixas', onclick: () => irPara('fixas') })));
   } else out.push(vazio('Sem despesas fixas.', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
   return out;
 }
 
-const FILTROS = { todas: () => true, rever: porRever, partilhadas: x => x.partilhada, receber: porReceber };
+const FILTROS = { todas: () => true, rever: x => porRever(x) || !!x.estimado, partilhadas: x => x.partilhada, receber: porReceber };
 function linhaDespesa(x) {
   const tags = [];
   if (x.categoria) tags.push(x.categoria); else if (x.origem === 'apple_pay') tags.push('Por rever');
   if (x.origem === 'apple_pay') tags.push('Apple Pay');
   if (x.origem === 'recorrente') tags.push('Fixa');
+  if (x.estimado) tags.push('Por confirmar');
   const tp = tagsPartilha(x); if (tp) tags.push(tp);
   if (x.data > hojeISO()) tags.push('a vencer');
   return h('button', { type: 'button', class: 'lrow', onclick: () => abrirDespesa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.descricao || x.comerciante || 'Sem descrição' }),
-      h('div', { class: 'rsub' + (porRever(x) ? ' warn' : ''), text: tags.join(' · ') })),
-    h('div', { class: 'rval', text: fmt(x.valor) }),
+      h('div', { class: 'rsub' + (porRever(x) || x.estimado ? ' warn' : ''), text: tags.join(' · ') })),
+    h('div', { class: 'rval', text: (x.estimado ? '≈ ' : '') + fmt(x.valor) }),
     h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
 }
 function viewDespesas() {
-  const nRever = S.despesas.filter(porRever).length, nRec = S.despesas.filter(porReceber).length;
+  const nRever = S.despesas.filter(FILTROS.rever).length, nRec = S.despesas.filter(porReceber).length;
   const filtros = [['todas', 'Todos'], ['rever', 'Por rever' + (nRever ? ' (' + nRever + ')' : '')], ['partilhadas', 'Partilhados'], ['receber', 'A receber' + (nRec ? ' (' + nRec + ')' : '')]];
   const out = [h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Filtrar gastos' }, filtros.map(([k, l]) => h('button', {
     type: 'button', class: 'chip', text: l, 'aria-pressed': String(S.filtro === k),
@@ -490,10 +506,10 @@ function linhaFixa(x) {
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.nome }),
       h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, transf ? 'Transferência para ' + (nomeConta(x.para_conta_id) || '—') : null,
-        x.debito_direto ? 'Débito direto' : null,
+        x.variavel ? 'Variável' : null, x.debito_direto ? 'Débito direto' : null,
         x.partilhada ? (x.parte_dela != null ? ELA() + ' paga ' + fmt(x.parte_dela) : 'Partilhada') : null,
         x.ativa ? null : 'Pausada'].filter(Boolean).join(' · ') })),
-    h('div', { class: 'rval', text: fmt(x.valor) }),
+    h('div', { class: 'rval', text: (x.variavel ? '≈ ' : '') + fmt(x.valor) }),
     h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
 }
 function viewFixas() {
@@ -502,7 +518,7 @@ function viewFixas() {
   const total = soma(gastosF, x => x.valor);
   const partesDela = soma(gastosF, parte);
   const out = [glabel('Por mês'), group(
-    kv('Gastos fixos', fmt(total), 'strong'),
+    kv('Gastos fixos', (gastosF.some(x => x.variavel) ? '≈ ' : '') + fmt(total), 'strong'),
     partesDela > 0 ? kv('Parte ' + DA(), '− ' + fmt(partesDela), 'pos') : null,
     partesDela > 0 ? kv('O teu custo fixo', fmt(r2(total - partesDela))) : null,
     transfF.length ? kv('Transferências entre contas', fmt(soma(transfF, x => x.valor))) : null
@@ -561,6 +577,10 @@ function viewAjustes() {
     hint('O token é a tua chave pessoal: não o partilhes. Quem o tiver só consegue adicionar gastos, não ler os teus dados.'),
 
     ...blocoFeeds(),
+
+    glabel('Segurança'),
+    pinPossivel() ? group(grow('PIN de 4 dígitos', h('button', { type: 'button', class: 'link b', text: 'Mudar PIN', onclick: mudarPin }))) : null,
+    hint(pinPossivel() ? 'O PIN fica só neste iPhone. A app pede-o ao abrir e quando voltas a ela depois de 1 minuto fora. 5 tentativas erradas terminam a sessão.' : 'Este navegador não deixa guardar o PIN.'),
 
     glabel('Conta'),
     group(kv('Sessão', S.user ? S.user.email : '—')),
@@ -638,13 +658,13 @@ function abrirDespesa(x, preset) {
 
   let origem = null;
   if (x && x.origem === 'apple_pay') origem = ['Apple Pay', x.cartao, x.comerciante].filter(Boolean).join(' · ');
-  if (x && x.origem === 'recorrente') origem = 'Lançado a partir de uma despesa fixa';
+  if (x && x.origem === 'recorrente') origem = x.estimado ? 'Valor estimado pela média das últimas faturas. Escreve o valor real e guarda.' : 'Lançado a partir de uma despesa fixa';
   const titulo = x ? (x.descricao || x.comerciante || 'Sem descrição') : '';
 
   let s;
   const conteudo = [
     valor, part.info,
-    origem ? hint(origem, 'center') : null,
+    origem ? hint(origem, x && x.estimado ? 'center warn' : 'center') : null,
     group(grow('Descrição', desc), grow('Data', data), contaSel ? contaSel.row : null),
     glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
@@ -655,20 +675,22 @@ function abrirDespesa(x, preset) {
       s.fechar(); await recarregar(); toast('Gasto apagado');
     }, () => s)
   ];
-  s = sheet(novo ? 'Novo gasto' : 'Editar gasto', conteudo, async () => {
+  s = sheet(novo ? 'Novo gasto' : x.estimado ? 'Confirmar fatura' : 'Editar gasto', conteudo, async () => {
     const v = validarValor(s, valor); if (v === null) return false;
     if (!data.value) return s.erro('Indica a data.', data);
     const p = validarPartilha(s, part, v); if (!p) return false;
     const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria,
-      partilhada: p.partilhada, parte_dela: p.parte_dela, recebido: p.recebido };
+      partilhada: p.partilhada, parte_dela: p.parte_dela, recebido: p.recebido, estimado: false };
     if (contaSel) payload.conta_id = contaSel.ler();
     if (novo) await q(sb.from('despesas').insert(payload));
     else await q(sb.from('despesas').update(payload).eq('id', x.id));
     const mesD = payload.data.slice(0, 8) + '01';
     await recarregar();
-    toast(mesD === S.mes ? 'Guardado' : 'Guardado em ' + nomeMes(mesD));
+    if (x && x.estimado) await carregarFixas();   // a estimativa da fixa mudou
+    toast(x && x.estimado ? 'Valor confirmado' : mesD === S.mes ? 'Guardado' : 'Guardado em ' + nomeMes(mesD));
   });
   if (novo && !ok(preset.valor)) valor.focus();
+  else if (x && x.estimado) { valor.focus(); valor.select(); }
 }
 
 function abrirGanho(x) {
@@ -711,6 +733,18 @@ function abrirFixa(x) {
   const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
   const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', 'aria-required': 'true', value: x ? String(x.dia_vencimento) : '' });
   const swDeb = interruptor(x ? x.debito_direto : false, 'Débito direto');
+  const swVar = interruptor(x ? x.variavel : false, 'Valor variável');
+  const rVar = grow('Valor variável', swVar);
+  const splitMes = h('div', { class: 'split', text: 'por mês' });
+  const hintVar = hint('Para contas que mudam todos os meses (água, luz): entra com esta estimativa e fica «por confirmar» até escreveres o valor da fatura. Depois, a estimativa passa a ser a média das últimas 3 faturas.');
+  const drawVar = () => {
+    const v = swVar.checked && tipo !== 'transferencia';
+    splitMes.textContent = v ? 'estimativa por mês' : 'por mês';
+    valor.setAttribute('aria-label', v ? 'Valor estimado por mês' : 'Valor mensal');
+    hintVar.hidden = !v;
+  };
+  hintVar.style.margin = '-6px 16px 18px';
+  swVar.addEventListener('change', drawVar);
   const rDia = grow('Dia do pagamento', dia);
   const drawDeb = () => { const t = swDeb.checked ? 'Dia do débito' : 'Dia do pagamento'; rDia.firstChild.textContent = t; dia.setAttribute('aria-label', t); };
   swDeb.addEventListener('change', drawDeb); drawDeb();
@@ -732,18 +766,21 @@ function abrirFixa(x) {
     if (grpTransf) grpTransf.hidden = !tr;
     if (contaSel) contaSel.row.hidden = tr;
     wrapCat.hidden = tr; wrapPart.hidden = tr; part.info.hidden = tr || part.info.hidden;
+    rVar.hidden = tr;
     nome.placeholder = tr ? 'Ex.: Pagamento Caetano GO' : 'Ex.: Ginásio';
+    drawVar();
   };
   const escTipo = podeTransf ? escolha([['Despesa', 'despesa'], ['Transferência', 'transferencia']], tipo, 'Tipo de fixa', false, drawTipo) : null;
   const swAtiva = interruptor(st.ativa, 'Ativa');
   swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
   let s;
   const conteudo = [
-    valor, part.info, h('div', { class: 'split', text: 'por mês' }),
+    valor, part.info, splitMes,
     escTipo ? group(h('div', { class: 'pad' }, escTipo.el)) : null,
-    group(grow('Nome', nome), grow('Débito direto', swDeb), rDia, contaSel ? contaSel.row : null),
+    group(grow('Nome', nome), rVar, grow('Débito direto', swDeb), rDia, contaSel ? contaSel.row : null),
     grpTransf,
     h('p', { class: 'hint', style: 'margin:-10px 16px 18px', text: 'Com débito direto o banco cobra sozinho nesse dia: a agenda avisa-te na véspera para confirmares o saldo.' }),
+    hintVar,
     wrapCat,
     wrapPart,
     novo ? null : group(grow('Ativa', swAtiva)),
@@ -766,11 +803,11 @@ function abrirFixa(x) {
       if (de.value === para.value) return s.erro('Escolhe duas contas diferentes.', para);
       const deId = Number(de.value);
       payload = { nome: n, valor: v, dia_vencimento: d, categoria: null, partilhada: false, parte_dela: null, ativa: st.ativa,
-        debito_direto: swDeb.checked, conta_id: p && deId === p.conta_id ? null : deId, para_conta_id: Number(para.value) };
+        debito_direto: swDeb.checked, variavel: false, conta_id: p && deId === p.conta_id ? null : deId, para_conta_id: Number(para.value) };
     } else {
       const pp = validarPartilha(s, part, v); if (!pp) return false;
       payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: pp.partilhada, parte_dela: pp.parte_dela, ativa: st.ativa,
-        debito_direto: swDeb.checked, para_conta_id: null };
+        debito_direto: swDeb.checked, variavel: swVar.checked, para_conta_id: null };
       if (contaSel) payload.conta_id = contaSel.ler();
     }
     if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
@@ -782,9 +819,12 @@ function abrirFixa(x) {
           valor: v, nota: n, data: dataMes, de_conta: payload.conta_id != null ? payload.conta_id : p.conta_id, para_conta: payload.para_conta_id
         }).eq('recorrente_id', x.id).gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m))));
       } else {
-        const atual = { valor: v, descricao: n, categoria: st.categoria, partilhada: payload.partilhada, parte_dela: payload.parte_dela, data: dataMes };
+        const atual = { descricao: n, categoria: st.categoria, partilhada: payload.partilhada, parte_dela: payload.parte_dela, data: dataMes };
         if (contaSel) atual.conta_id = payload.conta_id;
+        if (!payload.variavel) { atual.valor = v; atual.estimado = false; }
         await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m));
+        // variável: a estimativa nova só substitui o valor deste mês se a fatura ainda não foi confirmada
+        if (payload.variavel) await q(sb.from('despesas').update({ valor: v }).eq('recorrente_id', x.id).eq('mes', m).eq('estimado', true));
       }
     }
     await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
@@ -1063,7 +1103,7 @@ function linhaItemAgenda(it) {
         h('div', { class: 'rtitle', text: (f.debito_direto ? 'Débito direto: ' : f.para_conta_id != null ? 'Transferir: ' : 'Pagar ') + f.nome }),
         h('div', { class: 'rsub', text: [f.para_conta_id != null ? 'De ' + nomeConta(f.conta_id) + ' para ' + nomeConta(f.para_conta_id) : (f.debito_direto ? 'Sai sozinho' : 'Pagamento'),
           f.para_conta_id == null && S.contas.length > 1 ? nomeConta(f.conta_id) : null, f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
-      h('div', { class: 'rval', text: fmt(f.valor) }),
+      h('div', { class: 'rval', text: (f.variavel ? '≈ ' : '') + fmt(f.valor) }),
       h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
   }
   const ev = it.ev;
@@ -1223,7 +1263,7 @@ function irPara(t) {
   if (t === 'fixas') carregarFixas().then(render);
 }
 function render() {
-  if (!S.user) return;
+  if (!S.user || S.bloqueado) return;
   const views = { mes: viewMes, despesas: viewDespesas, ganhos: viewGanhos, agenda: viewAgenda, calcular: viewCalcular, fixas: viewFixas, ajustes: viewAjustes };
   const acoes = { mes: () => abrirDespesa(), despesas: () => abrirDespesa(), ganhos: () => abrirGanho(), agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
   const rotulos = { mes: 'Novo gasto', despesas: 'Novo gasto', ganhos: 'Novo ganho', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
@@ -1243,12 +1283,133 @@ function render() {
   app.replaceChildren(header, main, tabbar);
 }
 
+
+// ===================== PIN (bloqueio do ecrã) =====================
+// O PIN fica só neste dispositivo (PBKDF2 com sal, nunca sai do iPhone). Não substitui o login:
+// 5 tentativas erradas terminam a sessão e obrigam a entrar com email e palavra-passe.
+const PIN = { chave: 'gpp.pin.v1', falhas: 'gpp.pin.falhas', max: 5, foraMs: 60000 };
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } };
+const lsDel = k => { try { localStorage.removeItem(k); } catch (e) { /* sem armazenamento */ } };
+const b64 = buf => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+async function hashPin(pin, sal) {
+  const salt = Uint8Array.from(atob(sal), c => c.charCodeAt(0));
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  return b64(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: salt, iterations: 150000, hash: 'SHA-256' }, k, 256));
+}
+const pinPossivel = () => !!(window.crypto && crypto.subtle && lsSet('gpp.teste', '1'));
+function pinDe(uid) { try { const p = JSON.parse(lsGet(PIN.chave) || 'null'); return p && p.user === uid ? p : null; } catch (e) { return null; } }
+async function gravarPin(uid, pin) {
+  const sal = b64(crypto.getRandomValues(new Uint8Array(16)));
+  lsSet(PIN.chave, JSON.stringify({ user: uid, sal: sal, hash: await hashPin(pin, sal) }));
+  lsDel(PIN.falhas);
+}
+const pinObvio = p => /^(\d)\1{3}$/.test(p) || '0123456789'.includes(p) || '9876543210'.includes(p);
+let teclasPin = null;
+
+// modo: 'criar' (pede 2x) · 'abrir' · 'atual' (antes de mudar o PIN)
+function ecraPin(modo, uid, aoAcabar, aoCancelar) {
+  document.querySelectorAll('dialog').forEach(d => d.remove());
+  document.body.classList.remove('noscroll');
+  if (teclasPin) document.removeEventListener('keydown', teclasPin);
+  let digitos = '', primeiro = null, ocupado = false;
+  const titulo = h('h1', { id: 'pin-t' });
+  const sub = h('p', { class: 'pin-sub' });
+  const pontos = h('div', { class: 'pin-pontos', 'aria-hidden': 'true' }, [0, 1, 2, 3].map(() => h('i')));
+  const estado = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  const msg = h('p', { class: 'pin-erro', role: 'alert' });
+  const sair = fn => () => { document.removeEventListener('keydown', teclasPin); teclasPin = null; fn(); };
+  const textos = () => {
+    if (modo === 'criar') {
+      titulo.textContent = primeiro ? 'Confirma o PIN' : 'Cria um PIN';
+      sub.textContent = primeiro ? 'Escreve o mesmo PIN outra vez.' : '4 dígitos para abrir a app neste iPhone. Não uses o PIN do cartão.';
+    } else {
+      titulo.textContent = modo === 'atual' ? 'PIN atual' : 'GPP Dashboard';
+      sub.textContent = modo === 'atual' ? 'Escreve o PIN atual para o mudares.' : 'Escreve o teu PIN.';
+    }
+  };
+  const desenhar = () => {
+    [...pontos.children].forEach((p, i) => p.classList.toggle('on', i < digitos.length));
+    estado.textContent = digitos.length + ' de 4 dígitos';
+  };
+  const falhou = t => { msg.textContent = t; pontos.classList.add('erro'); digitos = ''; desenhar(); };
+  async function completo() {
+    ocupado = true;
+    try {
+      if (modo === 'criar') {
+        if (!primeiro) {
+          if (pinObvio(digitos)) return falhou('PIN demasiado óbvio. Escolhe outro.');
+          primeiro = digitos; digitos = ''; msg.textContent = ''; pontos.classList.remove('erro'); textos(); desenhar(); return;
+        }
+        if (digitos !== primeiro) { primeiro = null; textos(); return falhou('Os PINs não coincidem. Começa de novo.'); }
+        await gravarPin(uid, digitos);
+        return sair(aoAcabar)();
+      }
+      const p = pinDe(uid);
+      if (p && await hashPin(digitos, p.sal) === p.hash) { lsDel(PIN.falhas); return sair(aoAcabar)(); }
+      const n = (parseInt(lsGet(PIN.falhas) || '0', 10) || 0) + 1;
+      if (!p || n >= PIN.max) {
+        lsDel(PIN.falhas); lsDel(PIN.chave);
+        S.avisoLogin = 'Demasiadas tentativas erradas. Entra com o email e a palavra-passe e cria um PIN novo.';
+        document.removeEventListener('keydown', teclasPin); teclasPin = null;
+        await sb.auth.signOut();
+        return;
+      }
+      lsSet(PIN.falhas, String(n));
+      const resta = PIN.max - n;
+      falhou('PIN errado. ' + (resta === 1 ? 'Última tentativa antes de terminar a sessão.' : 'Faltam ' + resta + ' tentativas.'));
+    } finally { ocupado = false; }
+  }
+  const premir = n => {
+    if (ocupado || digitos.length >= 4) return;
+    if (!digitos) pontos.classList.remove('erro');
+    digitos += n; desenhar();
+    if (digitos.length === 4) completo();
+  };
+  const apagar = () => { if (!ocupado) { digitos = digitos.slice(0, -1); desenhar(); } };
+  const tecla = (t, fn, cls, aria) => h('button', { type: 'button', class: 'pin-tecla' + (cls ? ' ' + cls : ''), text: t, 'aria-label': aria || null, onclick: fn });
+  const teclado = h('div', { class: 'pin-teclado' },
+    ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(n => tecla(n, () => premir(n))),
+    aoCancelar ? tecla('Cancelar', sair(aoCancelar), 'txt') : h('span', { 'aria-hidden': 'true' }),
+    tecla('0', () => premir('0')),
+    tecla('⌫', apagar, 'txt', 'Apagar dígito'));
+  teclasPin = e => {
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); premir(e.key); }
+    else if (e.key === 'Backspace') { e.preventDefault(); apagar(); }
+  };
+  document.addEventListener('keydown', teclasPin);
+  const esqueci = () => {
+    lsDel(PIN.chave); lsDel(PIN.falhas);
+    S.avisoLogin = 'Entra com o email e a palavra-passe para criares um PIN novo.';
+    document.removeEventListener('keydown', teclasPin); teclasPin = null;
+    sb.auth.signOut();
+  };
+  textos(); desenhar();
+  app.replaceChildren(h('main', { class: 'pin', 'aria-labelledby': 'pin-t' },
+    titulo, sub, pontos, estado, msg, teclado,
+    modo !== 'criar' ? h('button', { type: 'button', class: 'link b', text: 'Esqueci-me do PIN', onclick: esqueci }) : null));
+}
+// Tranca a app (ao abrir ou ao voltar depois de PIN.foraMs fora)
+function bloquear() {
+  if (!S.user || !pinDe(S.user.id)) return false;
+  S.bloqueado = true;
+  ecraPin('abrir', S.user.id, () => { S.bloqueado = false; render(); recarregar(); });
+  return true;
+}
+function mudarPin() {
+  const uid = S.user.id, voltar = () => { S.bloqueado = false; render(); };
+  S.bloqueado = true;   // um carregamento por trás não tapa o ecrã do PIN
+  const criar = () => ecraPin('criar', uid, () => { voltar(); toast('PIN alterado'); }, voltar);
+  if (pinDe(uid)) ecraPin('atual', uid, criar, voltar); else criar();
+}
+
 function renderLogin() {
   document.querySelectorAll('dialog').forEach(d => d.remove());
   document.body.classList.remove('noscroll');
   const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next', placeholder: 'Email', 'aria-label': 'Email', required: true });
   const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', enterkeyhint: 'go', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
-  const lerr = h('p', { class: 'lerr', id: 'login-erro', role: 'alert', hidden: true });
+  const lerr = h('p', { class: 'lerr', id: 'login-erro', role: 'alert', hidden: !S.avisoLogin, text: S.avisoLogin || '' });
+  S.avisoLogin = null;
   const btn = h('button', { class: 'btn primary', type: 'submit', text: 'Entrar' });
   const form = h('form', { class: 'login', 'aria-labelledby': 'login-t' },
     h('div', { class: 'logo', 'aria-hidden': 'true', text: 'GPP' }), h('h1', { id: 'login-t', text: 'GPP Dashboard' }), h('p', { text: 'Os teus gastos e ganhos, num só sítio.' }),
@@ -1268,7 +1429,9 @@ function renderLogin() {
       pass.focus();
       return;
     }
-    await entrar(r.data.user);
+    const u = r.data.user;
+    if (pinPossivel() && !pinDe(u.id)) ecraPin('criar', u.id, () => entrar(u));
+    else await entrar(u);
   });
   app.replaceChildren(h('main', null, form));
 }
@@ -1289,21 +1452,29 @@ async function entrar(user) {
 sb.auth.onAuthStateChange(ev => {
   if (ev === 'SIGNED_OUT') {
     S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = []; S.contas = []; S.eventos = []; S.transf = []; S.diaSel = null;
-    S.calc = { init: false, eu: '', ela: '', valor: '' };
+    S.calc = { init: false, eu: '', ela: '', valor: '' }; S.bloqueado = false;
     setTimeout(renderLogin, 0);
   }
 });
 
 // Ao voltar à app (ex.: depois de pagar com Apple Pay), atualiza
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && S.user && S.mes) recarregar();
+  if (document.visibilityState === 'hidden') { S.saiuEm = Date.now(); document.body.classList.add('privado'); return; }
+  document.body.classList.remove('privado');
+  if (!S.user || S.bloqueado) return;
+  if (S.saiuEm && Date.now() - S.saiuEm >= PIN.foraMs && bloquear()) return;
+  if (S.mes) recarregar();
 });
 
 (async function init() {
   try {
     const r = await sb.auth.getSession();
     const session = r.data && r.data.session;
-    if (session) await entrar(session.user); else renderLogin();
+    if (!session) return renderLogin();
+    const u = session.user;
+    if (!pinPossivel()) return entrar(u);
+    if (pinDe(u.id)) { S.bloqueado = true; ecraPin('abrir', u.id, () => { S.bloqueado = false; entrar(u); }); }
+    else ecraPin('criar', u.id, () => entrar(u));
   } catch (e) { erro(e); renderLogin(); }
 })();
 })();

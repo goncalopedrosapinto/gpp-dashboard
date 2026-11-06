@@ -73,21 +73,23 @@ export function construirICS(dados, opts) {
   }
 
   for (const p of dados.pagamentos || []) {
+    const val = (p.variavel ? '≈ ' : '') + eur(p.valor);   // fixas variáveis: estimativa
     L.push('BEGIN:VEVENT', 'UID:pagamento-' + p.id + '-' + d8(p.data) + '@gpp-dashboard', 'DTSTAMP:' + stamp,
       'DTSTART;VALUE=DATE:' + d8(p.data), 'DTEND;VALUE=DATE:' + d8(maisUmDia(p.data)),
-      'SUMMARY:' + esc(prefixo('pagamentos') + (p.debito_direto ? 'Débito direto: ' : p.transferencia ? 'Transferir: ' : 'Pagar ') + p.nome + ' · ' + eur(p.valor)),
+      'SUMMARY:' + esc(prefixo('pagamentos') + (p.debito_direto ? 'Débito direto: ' : p.transferencia ? 'Transferir: ' : 'Pagar ') + p.nome + ' · ' + val),
       'TRANSP:TRANSPARENT', 'CATEGORIES:Pagamentos');
     const desc = [
       p.transferencia ? 'De ' + (p.conta || 'conta principal') + ' para ' + p.para + '.' + (p.debito_direto ? ' Sai sozinho: confirma que há saldo.' : '')
         : p.debito_direto ? 'Sai sozinho' + (p.conta ? ' da conta ' + p.conta : '') + '. Confirma que há saldo.' : (p.conta ? 'Conta: ' + p.conta : null),
+      p.variavel ? 'Valor estimado (média das últimas faturas).' : null,
       p.partilhada && p.parte_dela != null ? 'Parte ' + (nomeEla ? 'da ' + nomeEla : 'dela') + ': ' + eur(p.parte_dela) : null
     ].filter(Boolean).join('\n');
     if (desc) L.push('DESCRIPTION:' + esc(desc));
     // Evento de dia inteiro começa às 00:00: -15 h = 9:00 da véspera
     const aviso = p.transferencia
-      ? (p.debito_direto ? 'Amanhã saem ' : 'Amanhã: transferir ') + eur(p.valor) + (p.conta ? ' da ' + p.conta : '') + ' para ' + p.para
+      ? (p.debito_direto ? 'Amanhã saem ' : 'Amanhã: transferir ') + val + (p.conta ? ' da ' + p.conta : '') + ' para ' + p.para
       : p.debito_direto
-        ? 'Amanhã sai o débito de ' + p.nome + ' (' + eur(p.valor) + ')' + (p.conta ? ' da ' + p.conta : '')
+        ? 'Amanhã sai o débito de ' + p.nome + ' (' + val + ')' + (p.conta ? ' da ' + p.conta : '')
         : 'Amanhã: pagar ' + p.nome;
     L.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + esc(aviso), 'TRIGGER:-PT15H', 'END:VALARM', 'END:VEVENT');
   }

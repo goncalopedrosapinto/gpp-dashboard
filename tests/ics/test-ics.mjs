@@ -19,6 +19,7 @@ const dados = {
   pagamentos: [
     { id: 9, nome: 'Renda', valor: 600, partilhada: true, parte_dela: 300, data: '2026-12-01' },
     { id: 10, nome: 'Água', valor: 40, partilhada: false, parte_dela: null, data: '2026-11-30', debito_direto: true, conta: 'CGD à ordem' },
+    { id: 12, nome: 'Luz', valor: 47.5, partilhada: false, parte_dela: null, data: '2026-11-05', debito_direto: true, variavel: true, conta: 'CGD' },
     { id: 11, nome: 'Pagamento Caetano GO', valor: 127, partilhada: false, parte_dela: null, data: '2026-11-08', debito_direto: true, conta: 'MOEY', para: 'Caetano GO', transferencia: true }
   ]
 };
@@ -43,6 +44,7 @@ check(tudo.includes('SUMMARY:[Pagamentos] Débito direto: Água · 40\\,00 €')
 
 check(tudo.includes('DTSTART;VALUE=DATE:20261113') && tudo.includes('DTEND;VALUE=DATE:20261116'), 'vários dias, dia inteiro: 13 a 15 (DTEND exclusivo no dia 16)');
 check(tudo.includes('DTSTART;TZID=Europe/Lisbon:20261120T200000') && tudo.includes('DTEND;TZID=Europe/Lisbon:20261122T100000'), 'vários dias com hora: sex 20:00 → dom 10:00');
+check(tudo.includes('SUMMARY:[Pagamentos] Débito direto: Luz · ≈ 47\\,50 €') && tudo.replace(/\r\n /g, '').includes('Valor estimado (média das últimas faturas).'), 'fixa variável: valor com ≈ e nota de estimativa');
 check(tudo.includes('Amanhã saem 127\\,00 € da MOEY para Caetano GO') && tudo.includes('De MOEY para Caetano GO.'), 'transferência fixa: aviso diz de onde e para onde');
 
 // Validação independente (parser Python)
@@ -60,7 +62,7 @@ for f in sys.argv[1:]:
 try {
   const out = execFileSync('python3', ['-I', '-c', py, join(dir, 'tudo.ics'), join(dir, 'bia.ics')]).toString().trim().split('\n');
   console.log('    ' + out.join('\n    '));
-  check(out[0].startsWith('tudo.ics 9 1') && out[1].startsWith('bia.ics 2 1'), 'parser icalendar lê os dois feeds (9 e 2 eventos, fuso incluído)');
+  check(out[0].startsWith('tudo.ics 10 1') && out[1].startsWith('bia.ics 2 1'), 'parser icalendar lê os dois feeds (10 e 2 eventos, fuso incluído)');
   check(out[0].includes('2026-11-06 20:00:00+00:00') || out[0].includes('2026-11-06 20:00:00+00'), 'hora interpretada no fuso de Lisboa (inverno = UTC+0)');
 } catch (e) { check(false, 'parser icalendar: ' + e.message); }
 

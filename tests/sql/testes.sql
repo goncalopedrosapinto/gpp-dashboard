@@ -330,4 +330,52 @@ do $$ declare j jsonb; e jsonb; begin
 end $$;
 reset role;
 
+\echo '--- T16: fixas de valor variavel ---'
+set role authenticated;
+set request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$ declare r_id bigint; f_id bigint; m date := date_trunc('month', hoje_lisboa())::date;
+  mes_ date; est numeric;
+begin
+  insert into despesas_recorrentes (nome, valor, dia_vencimento, categoria, variavel, inicio)
+    values ('Luz', 40, 5, 'Casa', true, (m - interval '3 months')::date) returning id into r_id;
+  insert into despesas_recorrentes (nome, valor, dia_vencimento, categoria, inicio)
+    values ('Ginásio fixo', 27, 2, 'Saúde', (m - interval '3 months')::date) returning id into f_id;
+  -- mês -3: entra com a estimativa inicial e fica por confirmar
+  mes_ := (m - interval '3 months')::date;
+  perform gerar_recorrentes(mes_);
+  if not exists (select 1 from despesas where recorrente_id = r_id and mes = mes_ and estimado and valor = 40) then raise exception 'T16 falhou: gasto estimado'; end if;
+  if exists (select 1 from despesas where recorrente_id = f_id and estimado) then raise exception 'T16 falhou: fixa normal marcada como estimada'; end if;
+  update despesas set valor = 52, estimado = false where recorrente_id = r_id and mes = mes_;
+  if (select valor from despesas_recorrentes where id = r_id) <> 52 then raise exception 'T16 falhou: estimativa apos 1 fatura'; end if;
+  -- mês -2: entra com 52; fatura 38 -> média 45
+  mes_ := (m - interval '2 months')::date;
+  perform gerar_recorrentes(mes_);
+  if (select valor from despesas where recorrente_id = r_id and mes = mes_) <> 52 then raise exception 'T16 falhou: mes seguinte nao usa a estimativa nova'; end if;
+  update despesas set valor = 38, estimado = false where recorrente_id = r_id and mes = mes_;
+  if (select valor from despesas_recorrentes where id = r_id) <> 45 then raise exception 'T16 falhou: media de 2'; end if;
+  -- mês -1: confirma sem mudar o valor (45) -> média (52+38+45)/3 = 45
+  mes_ := (m - interval '1 month')::date;
+  perform gerar_recorrentes(mes_);
+  update despesas set estimado = false where recorrente_id = r_id and mes = mes_;
+  if (select valor from despesas_recorrentes where id = r_id) <> 45 then raise exception 'T16 falhou: confirmar sem mudar valor'; end if;
+  -- este mês: fatura 60 -> só as últimas 3 (60, 45, 38) = 47,67
+  perform gerar_recorrentes(m);
+  update despesas set valor = 60, estimado = false where recorrente_id = r_id and mes = m;
+  select valor into est from despesas_recorrentes where id = r_id;
+  if est <> 47.67 then raise exception 'T16 falhou: media das ultimas 3 (%)', est; end if;
+  -- fixa normal: mudar o gasto não mexe na fixa
+  update despesas set valor = 30 where recorrente_id = f_id and mes = m;
+  if (select valor from despesas_recorrentes where id = f_id) <> 27 then raise exception 'T16 falhou: fixa normal alterada'; end if;
+  if not exists (select 1 from proximos_pagamentos where recorrente_id = r_id and variavel) then raise exception 'T16 falhou: proximos sem variavel'; end if;
+  raise notice 'fixas variaveis: OK';
+end $$;
+reset role; set role anon; reset request.jwt.claim.sub;
+do $$ declare j jsonb; l jsonb; begin
+  j := calendario_dados(current_setting('t.tkcal'), 'pagamentos');
+  select x into l from jsonb_array_elements(j->'pagamentos') x where x->>'nome' = 'Luz' limit 1;
+  if l is null or not (l->>'variavel')::boolean then raise exception 'T16 falhou: feed sem variavel %', l; end if;
+  raise notice 'feed com variavel: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

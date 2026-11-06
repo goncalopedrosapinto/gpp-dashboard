@@ -35,11 +35,18 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 - **Calculadora:** o único sítio com divisão proporcional ao rendimento líquido de cada um. Registar a partir dela preenche a parte da Bia.
 - **Despesas fixas:** geradas uma vez por mês, na conta escolhida (ou na principal), com a parte da Bia se for partilhada. Com débito direto, a agenda diz «Débito direto: X» e avisa na véspera de que conta sai; o Resumo avisa quando o saldo atual da conta não chega para os próximos pagamentos. Se apagar a do mês, não volta. Dia 31 passa para o último dia do mês.
 - **Cartões de crédito:** são contas do tipo *crédito* com saldo negativo = dívida (na app escreve-se a dívida em positivo). Com plafond, a linha do cartão mostra «Livre X € de Y €» e uma barra de uso (vermelha a partir de 80%); o Resumo avisa se uma fixa no cartão passar o plafond. Uma compra com o cartão é um gasto nessa conta; pagar o cartão é uma **transferência** (ex.: MOEY → Caetano GO), nunca um gasto, para não contar a mesma despesa duas vezes. O Resumo mostra Disponível, Dívida nos cartões e Património líquido; os cartões não geram aviso de saldo.
+- **Fixas de valor variável** (água, luz): o valor da fixa é uma estimativa. Cada mês o gasto entra com ela e fica *por confirmar* (Resumo › Faturas por confirmar) até escrever o valor da fatura; ao confirmar, a estimativa passa a ser a média das últimas 3 faturas. Na agenda e no feed aparecem com ≈.
 - **Transferências fixas:** uma fixa com *Para* preenchido gera todos os meses uma transferência entre contas (ex.: CGD → MOEY, MOEY → cartão). Aparece na agenda como «Transferir: …» com De → Para e não entra no total de gastos fixos. A lista de fixas agrupa-se pela conta de onde sai o dinheiro.
 - **Transferências:** «Transferir» no Resumo move dinheiro entre contas (com descrição e data, pode ser futura). As do mês aparecem por baixo das contas; tocar numa edita ou apaga e os dois saldos acertam-se. Não contam como gasto nem como ganho.
 - **Contas:** o saldo de cada conta é o último ajuste ao valor real mais os movimentos posteriores (ganhos, gastos, o que a Bia devolve, transferências). Um ajuste no dia D já inclui tudo o que tem data anterior; do próprio dia só conta o que for registado depois. Gastos e ganhos sem conta escolhida vão para a principal.
 - **Agenda:** eventos próprios em quatro agendas (pessoal, trabalho, Bia, outro), de um ou vários dias (Começa/Termina, ex.: sex 20:00 → dom 10:00; mudar o início arrasta o fim), com hora ou dia inteiro, repetição (semanal, mensal, anual) e alerta. Os pagamentos das despesas fixas aparecem sozinhos. O iPhone subscreve cada agenda em separado (`webcal://…/functions/v1/calendario?t=TOKEN&a=bia`), com a sua cor e os alertas; os pagamentos avisam às 9:00 da véspera.
 - **Apple Pay:** entra via Atalho do iPhone (`rpc/registar_apple_pay`, protegido por token pessoal). Corrigir a categoria/partilha de um comerciante memoriza a regra para os próximos gastos.
+
+## Segurança no iPhone
+
+- **PIN de 4 dígitos:** pedido depois do primeiro login, ao abrir a app e ao voltar a ela depois de 1 minuto fora (o conteúdo fica escondido no seletor de apps). Fica só no dispositivo, como hash PBKDF2-SHA256 com sal; nunca vai para o servidor.
+- 5 tentativas erradas (contadas mesmo que a página seja recarregada) terminam a sessão: volta a ser preciso email e palavra-passe. «Esqueci-me do PIN» faz o mesmo.
+- O PIN tranca o ecrã; os dados continuam protegidos pelo login e pelo RLS do Supabase.
 
 ## Regras de interface
 

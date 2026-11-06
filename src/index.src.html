@@ -214,6 +214,21 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 .lfield[aria-invalid="true"]{box-shadow:0 0 0 2px var(--neg)}
 .lerr{color:var(--neg);font-size:15px;font-weight:600;margin:0}
 
+/* PIN */
+.pin{max-width:340px;margin:0 auto;padding:calc(env(safe-area-inset-top, 0px) + 5vh) 24px calc(env(safe-area-inset-bottom, 0px) + 16px);display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px}
+.pin h1{font-size:24px;margin:0}
+.pin-sub{margin:0;color:var(--muted);min-height:2.6em}
+.pin-pontos{display:flex;gap:18px;margin:12px 0 2px}
+.pin-pontos i{width:14px;height:14px;border-radius:7px;border:1.5px solid var(--text)}
+.pin-pontos i.on{background:var(--text)}
+.pin-pontos.erro i{border-color:var(--neg)}
+.pin-erro{color:var(--neg);font-size:15px;font-weight:600;margin:0;min-height:1.4em}
+.pin-teclado{display:grid;grid-template-columns:repeat(3,72px);gap:12px 24px;margin:4px 0 4px}
+.pin-tecla{width:72px;height:72px;border-radius:36px;border:0;background:var(--card);color:var(--text);font-size:30px;box-shadow:var(--shadow-sm)}
+.pin-tecla.txt{background:none;box-shadow:none;font-size:17px;color:var(--accent)}
+.pin-tecla:active{transform:scale(0.97);background:var(--press)}
+body.privado #app{visibility:hidden}
+
 #toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom, 0px));z-index:var(--z-toast);transform:translate(-50%,8px);
   max-width:calc(100% - 32px);padding:10px 16px;border-radius:20px;background:rgb(28 28 30 / .94);color:#fff;font-size:15px;
   opacity:0;pointer-events:none;transition:opacity .15s ease-out,transform .15s ease-out;text-align:center}
