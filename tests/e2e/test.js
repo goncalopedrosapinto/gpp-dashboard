@@ -390,6 +390,22 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await guardar();
   await toastTem('Transferido');
   check((await cgd()) === '2500,00€' && (await pou()) === eur(pouAntes + 500), 'transferir 500 €: CGD 2500 €, Poupança +500 €');
+  check((await texto()).toLowerCase().includes('transferências de novembro 2026') && await tem('CGD à ordem → Poupança'), 'a transferência aparece no Resumo com De → Para');
+  await page.click('.lrow:has(.rtitle:text-is("Transferência"))'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.inputValue('.sheet [aria-label="Valor a transferir"]')) === '500,00', 'tocar na transferência abre-a para editar');
+  await page.fill('.sheet [aria-label="Valor a transferir"]', '600');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Poupança mensal');
+  await guardar();
+  await toastTem('Transferência atualizada');
+  check((await cgd()) === '2400,00€' && (await pou()) === eur(pouAntes + 600), 'editar para 600 €: CGD 2400 €, Poupança +600 €');
+  await page.click('.lrow:has(.rtitle:text-is("Poupança mensal"))'); await page.waitForSelector('dialog.sheet[open]');
+  await apagarNaFolha();
+  await toastTem('Transferência apagada');
+  check((await cgd()) === '3000,00€' && (await pou()) === eur(pouAntes), 'apagar a transferência repõe os dois saldos');
+  await page.click('button:has-text("Transferir")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor a transferir"]', '500');
+  await guardar();
+  await toastTem('Transferido');
   await tab('Gastos');
   await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Valor"]', '100');
@@ -409,6 +425,8 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(await tem('quanto deves hoje neste cartão'), 'cartão de crédito pergunta quanto deves');
   await page.fill('.sheet [aria-label="Dívida hoje"]', '300');
   await page.fill('.sheet [aria-label="Nome da conta"]', 'Caetano GO');
+  check(await page.isVisible('.sheet [aria-label="Plafond"]') && await page.isHidden('.sheet [aria-label="Conta principal"]'), 'cartão de crédito pede o plafond (e não a conta principal)');
+  await page.fill('.sheet [aria-label="Plafond"]', '1500');
   await guardar();
   await toastTem('Conta criada');
   const cartao = async () => (await bdUser("select tipo, saldo_atual::float8 s, saldo_previsto::float8 p from saldos_contas where nome = 'Caetano GO'"))[0];
@@ -418,7 +436,9 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   let txt = await semEsp();
   check(txt.includes('Dívidanoscartões300,00€') && txt.includes('Patrimóniolíquido' + eur((await disp()) - 300)), 'Resumo separa disponível, dívida (300 €) e património líquido');
   const cgRow = '.lrow:has(.rtitle:text-is("Caetano GO"))';
-  check((await page.textContent(cgRow + ' .rval')).replace(/[\s  ]/g, '') === '300,00€' && (await page.textContent(cgRow + ' .rsub')).includes('em dívida'), 'linha do cartão mostra 300,00 € em dívida');
+  const subCg = async () => (await page.textContent(cgRow + ' .rsub')).replace(/[\s\u00a0\u202f]/g, '');
+  check((await page.textContent(cgRow + ' .rval')).replace(/[\s\u00a0\u202f]/g, '') === '300,00€' && (await subCg()) === 'Livre1200€de1500€', 'linha do cartão: 300,00 € em dívida, livre 1200 € de 1500 €');
+  check((await bd("select plafond from contas where nome = 'Caetano GO'"))[0].plafond === 1500 && await page.$(cgRow + ' .uso i[style*="width:20%"]') !== null, 'plafond gravado e barra de uso a 20%');
   await shot('17-cartao-credito');
   await auditar('cartão de crédito');
   await page.click('[aria-label="Ajustar: Caetano GO"]'); await page.waitForSelector('dialog.sheet[open]');
@@ -426,7 +446,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.fill('.sheet [aria-label="Dívida real hoje"]', '250');
   await guardar();
   await toastTem('Saldo ajustado');
-  check((await cartao()).s === -250, 'ajuste do cartão grava −250 €');
+  check((await cartao()).s === -250 && (await subCg()) === 'Livre1250€de1500€', 'ajuste do cartão grava −250 € e o livre sobe para 1250 €');
 
   await irFixas();
   await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
@@ -473,7 +493,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.selectOption('.sheet [aria-label="Conta"]', { label: 'Caetano GO' });
   await guardar();
   await tab('Resumo');
-  check((await cartao()).s === -286 && (await semEsp()).includes('Dívidanoscartões286,00€'), 'gasto pago com o cartão aumenta a dívida para 286 €');
+  check((await cartao()).s === -286 && (await semEsp()).includes('Dívidanoscartões286,00€') && (await subCg()) === 'Livre1214€de1500€', 'gasto pago com o cartão: dívida 286 €, livre 1214 €');
   check(!(await texto()).includes('Saldo atual da Caetano GO'), 'cartões de crédito não geram aviso de saldo');
 
 
@@ -555,6 +575,60 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(href === 'webcal://klmjdjhvsxvopctgmhyu.supabase.co/functions/v1/calendario?t=' + tkCal + '&a=bia', 'Ajustes: link webcal da agenda Bia com o token');
   await page.click('button:has-text("Fechar")');
 
+
+  console.log('Eventos de vários dias');
+  await tab('Agenda');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Gerês');
+  await page.check('.sheet [aria-label="Todo o dia"]');
+  await page.fill('.sheet [aria-label="Data"]', '2026-11-13');
+  check((await page.inputValue('.sheet [aria-label="Data de fim"]')) === '2026-11-13', 'mudar o início arrasta o fim');
+  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-12');
+  await page.click('.sheet .snav .link.b');
+  check(await tem('O fim tem de ser no próprio dia ou depois do início'), 'fim antes do início (datas): erro');
+  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-15');
+  await shot('20-evento-varios-dias');
+  await auditar('evento de vários dias');
+  await guardar();
+  await toastTem('Evento guardado');
+  const dot = async (d, a) => (await page.$('.cal-dia:has(.cal-num:text-is("' + d + '")) .ag-' + a)) !== null;
+  check(await dot(13, 'pessoal') && await dot(14, 'pessoal') && await dot(15, 'pessoal') && !(await dot(16, 'pessoal')) && !(await dot(12, 'pessoal')), 'Gerês marca os dias 13, 14 e 15 (e só esses)');
+  await page.click('.cal-dia:has(.cal-num:text-is("14"))');
+  check(await tem('Todo o dia · Dia 2 de 3'), 'dia 14 mostra "Dia 2 de 3"');
+  check((await bd("select data_fim from eventos where titulo = 'Gerês'"))[0].data_fim === '2026-11-15', 'data de fim gravada');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Feira de motas');
+  await page.click('.sheet .chip:has-text("Trabalho")');
+  await page.fill('.sheet [aria-label="Data"]', '2026-11-20');
+  await page.fill('.sheet [aria-label="Início"]', '20:00');
+  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-22');
+  await page.click('.sheet .snav .link.b');
+  check(await tem('Indica a hora a que termina'), 'vários dias com hora: pede a hora de fim');
+  await page.fill('.sheet [aria-label="Fim"]', '10:00');
+  await page.evaluate(() => document.querySelector('.sheet [aria-label="Data de fim"]').scrollIntoView({ block: 'center' }));
+  await shot('20b-evento-com-horas');
+  await guardar();
+  await page.click('.cal-dia:has(.cal-num:text-is("20"))');
+  check(await tem('Começa às 20:00 · Dia 1 de 3'), 'sex 20:00 → dom 10:00: dia 20 "Começa às 20:00"');
+  await page.click('.cal-dia:has(.cal-num:text-is("22"))');
+  check(await tem('Termina às 10:00 · Dia 3 de 3'), 'dia 22 "Termina às 10:00" (fim antes da hora de início é válido em dias diferentes)');
+  await shot('21-agenda-varios-dias');
+  await page.click('.cal-dia:has(.cal-num:text-is("13"))');
+  await page.click('.lrow:has-text("Gerês")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Data"]', '2026-11-14');
+  check((await page.inputValue('.sheet [aria-label="Data de fim"]')) === '2026-11-16', 'editar: mudar o início para 14 leva o fim para 16 (mantém 3 dias)');
+  await guardar();
+  check(!(await dot(13, 'pessoal')) && await dot(16, 'pessoal'), 'Gerês passa a 14–16');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Viagem');
+  await page.check('.sheet [aria-label="Todo o dia"]');
+  await page.fill('.sheet [aria-label="Data"]', '2026-10-30');
+  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-02');
+  await guardar();
+  check(await tem('Outubro 2026'), 'evento que começa em outubro leva a agenda para outubro');
+  await page.click('[aria-label="Mês seguinte"]'); await page.waitForTimeout(300);
+  check(await dot(1, 'pessoal') && await dot(2, 'pessoal') && !(await dot(3, 'pessoal')), 'evento de 30 out a 2 nov aparece em 1 e 2 de novembro');
+  await page.click('.cal-dia.hoje');
 
   console.log('Débito direto');
   await irFixas();

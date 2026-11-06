@@ -291,4 +291,43 @@ do $$ declare j jsonb; t jsonb; begin
 end $$;
 reset role;
 
+\echo '--- T15: eventos de varios dias e plafond ---'
+set role authenticated;
+set request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$ declare id1 bigint; id2 bigint; card bigint := current_setting('t.card')::bigint; begin
+  -- um dia: data_fim fica igual a data
+  insert into eventos (titulo, data, dia_inteiro) values ('Um dia', '2026-11-20', true) returning id into id1;
+  if (select data_fim from eventos where id = id1) <> '2026-11-20' then raise exception 'T15 falhou: data_fim por defeito'; end if;
+  -- vários dias com hora: 20:00 sex -> 10:00 dom é válido
+  insert into eventos (titulo, data, data_fim, hora_inicio, hora_fim) values ('Gerês', '2026-11-20', '2026-11-22', '20:00', '10:00') returning id into id2;
+  -- no mesmo dia continua a não poder acabar antes de começar
+  begin insert into eventos (titulo, data, hora_inicio, hora_fim) values ('Ao contrario', '2026-11-20', '10:00', '09:00');
+    raise exception 'T15 falhou: aceitou fim antes do inicio no mesmo dia';
+  exception when check_violation then null; end;
+  begin insert into eventos (titulo, data, data_fim, dia_inteiro) values ('Fim antes', '2026-11-20', '2026-11-19', true);
+    raise exception 'T15 falhou: aceitou data_fim < data';
+  exception when check_violation then null; end;
+  -- mudar só o início arrasta o fim
+  update eventos set data = '2026-11-27' where id = id2;
+  if (select data_fim from eventos where id = id2) <> '2026-11-29' then raise exception 'T15 falhou: fim nao acompanhou (%)', (select data_fim from eventos where id = id2); end if;
+  -- mudar os dois respeita o que vem
+  update eventos set data = '2026-12-04', data_fim = '2026-12-05' where id = id2;
+  if (select data_fim from eventos where id = id2) <> '2026-12-05' then raise exception 'T15 falhou: data_fim explicita'; end if;
+  -- plafond
+  update contas set plafond = 1500 where id = card;
+  if (select disponivel from saldos_contas where conta_id = card) is distinct from 1500 + (select saldo_atual from saldos_contas where conta_id = card) then raise exception 'T15 falhou: disponivel'; end if;
+  if exists (select 1 from saldos_contas where tipo <> 'credito' and disponivel is not null) then raise exception 'T15 falhou: disponivel fora do credito'; end if;
+  begin update contas set plafond = -1 where id = card; raise exception 'T15 falhou: plafond negativo';
+  exception when check_violation then null; end;
+  raise notice 'varios dias e plafond: OK';
+end $$;
+reset role; set role anon; reset request.jwt.claim.sub;
+do $$ declare j jsonb; e jsonb; begin
+  j := calendario_dados(current_setting('t.tkcal'), null);
+  select x into e from jsonb_array_elements(j->'eventos') x where x->>'titulo' = 'Gerês';
+  if e->>'data_fim' <> '2026-12-05' then raise exception 'T15 falhou: feed sem data_fim %', e; end if;
+  raise notice 'feed com data_fim: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

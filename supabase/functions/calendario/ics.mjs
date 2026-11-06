@@ -53,11 +53,13 @@ export function construirICS(dados, opts) {
   for (const e of dados.eventos || []) {
     L.push('BEGIN:VEVENT', 'UID:evento-' + e.id + '@gpp-dashboard', 'DTSTAMP:' + stamp);
     if (e.atualizado_em) L.push('LAST-MODIFIED:' + carimbo(e.atualizado_em));
+    const fimD = e.data_fim && e.data_fim > e.data ? e.data_fim : e.data;   // eventos de vários dias
     if (e.dia_inteiro || !e.hora_inicio) {
-      L.push('DTSTART;VALUE=DATE:' + d8(e.data), 'DTEND;VALUE=DATE:' + d8(maisUmDia(e.data)));
+      L.push('DTSTART;VALUE=DATE:' + d8(e.data), 'DTEND;VALUE=DATE:' + d8(maisUmDia(fimD)));   // DTEND é exclusivo
     } else {
       L.push('DTSTART;TZID=Europe/Lisbon:' + d8(e.data) + 'T' + hms(e.hora_inicio));
-      L.push(e.hora_fim ? 'DTEND;TZID=Europe/Lisbon:' + d8(e.data) + 'T' + hms(e.hora_fim) : 'DURATION:PT1H');
+      if (e.hora_fim) L.push('DTEND;TZID=Europe/Lisbon:' + d8(fimD) + 'T' + hms(e.hora_fim));
+      else L.push(fimD !== e.data ? 'DTEND;TZID=Europe/Lisbon:' + d8(fimD) + 'T' + hms(e.hora_inicio) : 'DURATION:PT1H');
     }
     if (RRULE[e.repete]) L.push('RRULE:' + RRULE[e.repete]);
     L.push('SUMMARY:' + esc(prefixo(e.agenda) + e.titulo));

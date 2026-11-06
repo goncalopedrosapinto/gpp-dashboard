@@ -12,7 +12,9 @@ const dados = {
     { id: 1, titulo: 'Jantar com a Bia', agenda: 'bia', data: '2026-11-06', dia_inteiro: false, hora_inicio: '20:00:00', hora_fim: '22:00:00', repete: 'nunca', alerta_min: 30, local: 'Aveiro, Rua Direita; 2.º', notas: 'Linha 1\nLinha 2', atualizado_em: '2026-11-06T10:00:00Z' },
     { id: 2, titulo: 'Aniversário da Bia', agenda: 'bia', data: '2026-03-14', dia_inteiro: true, hora_inicio: null, hora_fim: null, repete: 'anual', alerta_min: 1440 },
     { id: 3, titulo: 'Reunião de vendas — revisão semanal do pipeline e das margens de todas as motas usadas em stock', agenda: 'trabalho', data: '2026-11-09', dia_inteiro: false, hora_inicio: '09:30:00', hora_fim: null, repete: 'semanal', alerta_min: 15 },
-    { id: 4, titulo: 'Ginásio', agenda: 'pessoal', data: '2026-11-07', dia_inteiro: false, hora_inicio: '07:00:00', hora_fim: '08:00:00', repete: 'nunca', alerta_min: null }
+    { id: 4, titulo: 'Ginásio', agenda: 'pessoal', data: '2026-11-07', dia_inteiro: false, hora_inicio: '07:00:00', hora_fim: '08:00:00', repete: 'nunca', alerta_min: null },
+    { id: 5, titulo: 'Gerês', agenda: 'pessoal', data: '2026-11-13', data_fim: '2026-11-15', dia_inteiro: true, hora_inicio: null, hora_fim: null, repete: 'nunca', alerta_min: null },
+    { id: 6, titulo: 'Feira de motas', agenda: 'trabalho', data: '2026-11-20', data_fim: '2026-11-22', dia_inteiro: false, hora_inicio: '20:00:00', hora_fim: '10:00:00', repete: 'nunca', alerta_min: null }
   ],
   pagamentos: [
     { id: 9, nome: 'Renda', valor: 600, partilhada: true, parte_dela: 300, data: '2026-12-01' },
@@ -39,6 +41,8 @@ check(tudo.includes('SUMMARY:[Pagamentos] Pagar Renda · 600\\,00 €') && tudo.
 check(tudo.includes('DESCRIPTION:Parte da Bia: 300\\,00 €'), 'pagamento partilhado mostra a parte da Bia');
 check(tudo.includes('SUMMARY:[Pagamentos] Débito direto: Água · 40\\,00 €') && tudo.includes('Amanhã sai o débito de Água (40\\,00 €) da CGD à ordem'), 'débito direto: título e aviso dizem de que conta sai');
 
+check(tudo.includes('DTSTART;VALUE=DATE:20261113') && tudo.includes('DTEND;VALUE=DATE:20261116'), 'vários dias, dia inteiro: 13 a 15 (DTEND exclusivo no dia 16)');
+check(tudo.includes('DTSTART;TZID=Europe/Lisbon:20261120T200000') && tudo.includes('DTEND;TZID=Europe/Lisbon:20261122T100000'), 'vários dias com hora: sex 20:00 → dom 10:00');
 check(tudo.includes('Amanhã saem 127\\,00 € da MOEY para Caetano GO') && tudo.includes('De MOEY para Caetano GO.'), 'transferência fixa: aviso diz de onde e para onde');
 
 // Validação independente (parser Python)
@@ -56,7 +60,7 @@ for f in sys.argv[1:]:
 try {
   const out = execFileSync('python3', ['-I', '-c', py, join(dir, 'tudo.ics'), join(dir, 'bia.ics')]).toString().trim().split('\n');
   console.log('    ' + out.join('\n    '));
-  check(out[0].startsWith('tudo.ics 7 1') && out[1].startsWith('bia.ics 2 1'), 'parser icalendar lê os dois feeds (7 e 2 eventos, fuso incluído)');
+  check(out[0].startsWith('tudo.ics 9 1') && out[1].startsWith('bia.ics 2 1'), 'parser icalendar lê os dois feeds (9 e 2 eventos, fuso incluído)');
   check(out[0].includes('2026-11-06 20:00:00+00:00') || out[0].includes('2026-11-06 20:00:00+00'), 'hora interpretada no fuso de Lisboa (inverno = UTC+0)');
 } catch (e) { check(false, 'parser icalendar: ' + e.message); }
 

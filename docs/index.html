@@ -134,6 +134,11 @@ button.lrow:active{background:var(--press)}
 .catrow{padding:10px 16px}
 .cattop{display:flex;justify-content:space-between;gap:12px}
 .bar{height:6px;border-radius:3px;background:var(--accent);margin-top:7px;min-width:4px}
+.uso{height:4px;border-radius:2px;background:var(--chip);margin-top:6px;overflow:hidden}
+.uso i{display:block;height:100%;background:var(--accent);border-radius:2px}
+.uso i.alto{background:var(--neg)}
+.datahora{gap:8px}
+.datahora .ginput[type=date]{flex:1.4}
 
 /* Esqueletos de carregamento (estÃ¡ticos) */
 .skel{background:var(--card);border-radius:12px;padding:6px 16px;margin-top:22px}
@@ -268,7 +273,7 @@ button,a,[role="button"],.chip,.tab,.cal-dia{       /* toque imediato; sem seleÃ
 // ===================== Configura\u00e7\u00e3o =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.7 \u00b7 nov 2026';
+const VERSAO = 'v1.8 \u00b7 nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restaura\u00e7\u00e3o', 'Transportes', 'Sa\u00fade', 'Lazer', 'Compras', 'Subscri\u00e7\u00f5es', 'Outros'];
 const CAT_GANHOS = ['Sal\u00e1rio', 'Comiss\u00f5es', 'Pr\u00e9mios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -285,7 +290,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 const S = {
   user: null, config: null, tab: 'mes', mes: null, filtro: 'todas', loading: false, seq: 0,
-  despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [], contas: [], eventos: [], diaSel: null,
+  despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [], contas: [], eventos: [], transf: [], diaSel: null,
   calc: { init: false, eu: '', ela: '', valor: '' }
 };
 
@@ -354,6 +359,9 @@ const mesAtual = () => hojeISO().slice(0, 8) + '01';
 function addMes(m, n) { const [y, mo] = m.split('-').map(Number); return iso(new Date(y, mo - 1 + n, 1)); }
 function ultimoDia(m) { const [y, mo] = m.split('-').map(Number); return new Date(y, mo, 0).getDate(); }
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+function diasEntre(a, b) { const [y1, m1, d1] = a.split('-').map(Number), [y2, m2, d2] = b.split('-').map(Number); return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000); }
+function somaDias(d, n) { const [y, m, da] = d.split('-').map(Number); return new Date(Date.UTC(y, m - 1, da + n)).toISOString().slice(0, 10); }
+const fmtC = v => fmt(v).replace(/,00(?=\s*\u20ac)/, '');   // 1500 \u20ac em vez de 1500,00 \u20ac
 function nomeMes(m) {
   const [y, mo] = m.split('-').map(Number);
   return cap(new Intl.DateTimeFormat('pt-PT', { month: 'long' }).format(new Date(y, mo - 1, 1))) + ' ' + y;
@@ -533,8 +541,9 @@ async function carregarMes() {
       q(sb.from('despesas').select('*').eq('partilhada', true).eq('recebido', false).order('data', { ascending: false }).order('id', { ascending: false })),
       q(sb.from('proximos_pagamentos').select('*').order('data_vencimento').limit(5)),
       q(sb.from('saldos_contas').select('*').order('ordem').order('conta_id')),
-      q(sb.from('eventos').select('*').eq('repete', 'nunca').gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m)))),
-      q(sb.from('eventos').select('*').neq('repete', 'nunca').lte('data', m.slice(0, 8) + pad2(ultimoDia(m))))
+      q(sb.from('eventos').select('*').eq('repete', 'nunca').lte('data', m.slice(0, 8) + pad2(ultimoDia(m))).gte('data_fim', m)),
+      q(sb.from('eventos').select('*').neq('repete', 'nunca').lte('data', m.slice(0, 8) + pad2(ultimoDia(m)))),
+      q(sb.from('transferencias').select('*').gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m))).order('data', { ascending: false }).order('id', { ascending: false }))
     ]);
     if (seq !== S.seq) return;
     S.despesas = res[0] || [];
@@ -543,6 +552,7 @@ async function carregarMes() {
     S.proximos = res[3] || [];
     S.contas = res[4] || [];
     S.eventos = (res[5] || []).concat(res[6] || []);
+    S.transf = res[7] || [];
   } catch (e) { if (seq === S.seq) erro(e); }
   finally { if (seq === S.seq) S.loading = false; }
 }
@@ -1064,11 +1074,13 @@ const nomeConta = id => { const c = contaDe(id); return c ? c.nome : null; };
 function avisosSaldo(proximos) {
   if (!S.contas.length) return proximos.map(() => null);
   const resto = {};
-  S.contas.forEach(c => { resto[c.conta_id] = Number(c.saldo_atual); });
+  // contas: saldo atual \u00b7 cart\u00f5es: o que resta do plafond (sem plafond n\u00e3o se avisa)
+  S.contas.forEach(c => { resto[c.conta_id] = eCredito(c) ? (c.disponivel != null ? Number(c.disponivel) : null) : Number(c.saldo_atual); });
   return proximos.map(x => {
-    const c = contaDe(x.conta_id); if (!c || eCredito(c)) return null;
+    const c = contaDe(x.conta_id); if (!c || resto[c.conta_id] == null) return null;
     resto[c.conta_id] = r2(resto[c.conta_id] - Number(x.valor));
-    return resto[c.conta_id] < 0 ? 'Saldo atual da ' + c.nome + ' n\u00e3o chega' : null;
+    if (resto[c.conta_id] >= 0) return null;
+    return eCredito(c) ? 'Plafond do ' + c.nome + ' n\u00e3o chega' : 'Saldo atual da ' + c.nome + ' n\u00e3o chega';
   });
 }
 
@@ -1104,21 +1116,37 @@ function blocoDinheiro() {
     cartoes.length ? kv('Patrim\u00f3nio l\u00edquido', fmt(r2(disponivel - divida)), 'strong') : null));
   const linha = c => {
     const cred = eCredito(c), v = Number(c.saldo_atual);
+    const plaf = cred && c.plafond != null && Number(c.plafond) > 0 ? Number(c.plafond) : null;
+    const livre = plaf != null ? Number(c.disponivel) : null;
+    const sub = !cred ? (c.principal ? 'Principal' : TIPOS_CONTA[c.tipo])
+      : plaf == null ? 'Cart\u00e3o \u00b7 ' + (v < 0 ? 'em d\u00edvida' : 'sem d\u00edvida')
+      : livre < 0 ? 'Acima do plafond em ' + fmtC(-livre)
+      : 'Livre ' + fmtC(livre) + ' de ' + fmtC(plaf);
+    const uso = plaf != null ? Math.min(1, Math.max(0, -v / plaf)) : 0;
     return h('div', { class: 'lrow' },
       h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirConta(c) },
         h('div', { class: 'rtitle', text: c.nome }),
-        h('div', { class: 'rsub', text: cred ? 'Cart\u00e3o \u00b7 ' + (v < 0 ? 'em d\u00edvida' : 'sem d\u00edvida') : c.principal ? 'Principal' : TIPOS_CONTA[c.tipo] })),
+        h('div', { class: 'rsub' + (livre != null && livre < 0 ? ' warn' : ''), text: sub }),
+        plaf != null ? h('div', { class: 'uso', 'aria-hidden': 'true' }, h('i', { class: uso >= 0.8 ? 'alto' : null, style: 'width:' + Math.round(uso * 100) + '%' })) : null),
       h('div', { class: 'rval' + ((cred ? v < 0 : v < 0) ? ' neg' : ''), text: fmt(cred ? Math.abs(v) : v) }),
       h('button', { type: 'button', class: 'mini', text: 'Ajustar', 'aria-label': 'Ajustar: ' + c.nome, onclick: () => abrirAjuste(c) }));
   };
   out.push(h('div', { style: 'height:8px' }), lista(dinheiro.concat(cartoes).map(linha)));
   out.push(h('div', { class: 'linha-acoes' },
-    S.contas.length >= 2 ? h('button', { type: 'button', class: 'link b', text: 'Transferir', onclick: () => abrirTransferencia() }) : null,
+    h('button', { type: 'button', class: 'link b', text: 'Transferir', onclick: () => abrirTransferencia() }),
     h('button', { type: 'button', class: 'link b', text: 'Nova conta', onclick: () => abrirConta(null) })));
+  if (S.transf.length) {
+    out.push(glabel('Transfer\u00eancias de ' + mesMin(S.mes), 'h3'), lista(S.transf.map(t => h('button', { type: 'button', class: 'lrow', onclick: () => abrirTransferencia(t) },
+      h('div', { class: 'rmain' },
+        h('div', { class: 'rtitle', text: t.nota || 'Transfer\u00eancia' }),
+        h('div', { class: 'rsub', text: [diaCurto(t.data), (nomeConta(t.de_conta) || '\u2014') + ' \u2192 ' + (nomeConta(t.para_conta) || '\u2014'), t.recorrente_id ? 'Fixa' : null, t.data > hojeISO() ? 'agendada' : null].filter(Boolean).join(' \u00b7 ') })),
+      h('div', { class: 'rval', text: fmt(t.valor) }),
+      h('span', { class: 'chev', text: '\u203a', 'aria-hidden': 'true' })))));
+  }
   return out;
 }
 
-function abrirConta(x) {
+function abrirConta(x, aviso) {
   const novo = !x, primeira = !S.contas.length;
   const stT = { categoria: TIPOS_CONTA[x ? x.tipo : 'corrente'] };
   const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', maxlength: '40', 'aria-label': 'Nome da conta', 'aria-required': 'true',
@@ -1128,25 +1156,32 @@ function abrirConta(x) {
   const tipoAtual = () => Object.keys(TIPOS_CONTA).find(k => TIPOS_CONTA[k] === stT.categoria) || 'corrente';
   const swP = interruptor(x ? x.principal : primeira, 'Conta principal');
   if ((x && x.principal) || primeira) swP.disabled = true;
+  const rPrinc = grow('Conta principal', swP);
+  const plaf = campoValor(x && x.plafond != null ? x.plafond : null, 'Plafond', { placeholder: 'Opcional' });
+  const rPlaf = grow('Plafond', plaf);
   const chipsTipo = chips(Object.values(TIPOS_CONTA), stT, 'Tipo de conta');
   const drawTipo = () => {
     const cred = tipoAtual() === 'credito';
     legenda.textContent = cred ? 'quanto deves hoje neste cart\u00e3o' : 'quanto tens hoje nesta conta';
     if (saldo) saldo.setAttribute('aria-label', cred ? 'D\u00edvida hoje' : 'Saldo hoje');
+    rPlaf.hidden = !cred;
+    rPrinc.hidden = cred && !swP.disabled;
   };
   chipsTipo.addEventListener('click', () => setTimeout(drawTipo, 0));
   drawTipo();
   let s;
   const cred0 = x && eCredito(x);
   const conteudo = [
+    aviso ? hint(aviso, 'warn') : null,
     novo ? [saldo, legenda]
       : group(kv(cred0 ? 'Em d\u00edvida' : 'Saldo atual', fmt(cred0 ? Math.abs(Number(x.saldo_atual)) : x.saldo_atual), 'strong'),
+          cred0 && x.disponivel != null ? kv('Livre', fmt(x.disponivel) + ' de ' + fmt(x.plafond)) : null,
           x.data_ajuste ? kv('\u00daltimo ajuste', diaCurto(x.data_ajuste) + ' \u00b7 ' + fmt(cred0 ? Math.abs(Number(x.saldo_ajuste)) : x.saldo_ajuste)) : null,
           grow('', h('button', { type: 'button', class: 'link b', text: 'Ajustar ao valor real', onclick: () => abrirAjuste(x) }))),
     group(grow('Nome', nome)),
     glabel('Tipo', 'h3'),
     group(h('div', { class: 'pad' }, chipsTipo)),
-    group(grow('Conta principal', swP)),
+    group(rPlaf, rPrinc),
     hint('Os gastos e ganhos entram na conta principal, a n\u00e3o ser que escolhas outra no pr\u00f3prio lan\u00e7amento. Compras com cart\u00e3o de cr\u00e9dito v\u00e3o para o cart\u00e3o; pag\u00e1-lo \u00e9 uma transfer\u00eancia, n\u00e3o um gasto.'),
     !novo && !x.principal ? botaoApagar('Apagar conta', 'Apagar \u00ab' + x.nome + '\u00bb?', 'Os ajustes e transfer\u00eancias desta conta s\u00e3o apagados. Os gastos e ganhos mant\u00eam-se e passam para a conta principal.', async () => {
       await q(sb.from('contas').delete().eq('id', x.conta_id));
@@ -1163,11 +1198,17 @@ function abrirConta(x) {
     const n = nome.value.trim();
     if (!n) return s.erro('D\u00e1 um nome \u00e0 conta.', nome);
     if (tipo === 'credito' && swP.checked && !(x && x.principal) && !primeira) return s.erro('Um cart\u00e3o de cr\u00e9dito n\u00e3o pode ser a conta principal.', swP);
+    let pl = null;
+    if (tipo === 'credito' && plaf.value.trim()) {
+      pl = parseNum(plaf.value);
+      if (!ok(pl) || pl < 0) return s.erro('O plafond tem de ser um valor v\u00e1lido.', plaf);
+    }
     if (novo) {
       const v = parseNum(saldo.value);
-      await q(sb.rpc('criar_conta', { p_nome: n, p_tipo: tipo, p_saldo: tipo === 'credito' ? -Math.abs(v) : v, p_principal: swP.checked }));
+      const id = await q(sb.rpc('criar_conta', { p_nome: n, p_tipo: tipo, p_saldo: tipo === 'credito' ? -Math.abs(v) : v, p_principal: tipo === 'credito' ? primeira : swP.checked }));
+      if (pl != null) await q(sb.from('contas').update({ plafond: pl }).eq('id', Number(id)));
     } else {
-      await q(sb.from('contas').update({ nome: n, tipo: tipo }).eq('id', x.conta_id));
+      await q(sb.from('contas').update({ nome: n, tipo: tipo, plafond: pl }).eq('id', x.conta_id));
       if (swP.checked && !x.principal) await q(sb.rpc('definir_principal', { p_conta: x.conta_id }));
     }
     await recarregar();
@@ -1202,24 +1243,35 @@ function abrirAjuste(c) {
   inp.focus(); inp.select();
 }
 
-function abrirTransferencia() {
+function abrirTransferencia(x) {
+  if (S.contas.length < 2) { abrirConta(null, 'Para transferir precisas de duas contas. Cria aqui a conta para onde vai o dinheiro (ex.: Poupan\u00e7a).'); return; }
+  const novo = !x;
   const p = contaPrincipal() || S.contas[0];
   const outra = S.contas.find(c => c.conta_id !== p.conta_id) || p;
-  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor a transferir', 'aria-required': 'true' });
-  const de = selectConta(p.conta_id, 'De'), para = selectConta(outra.conta_id, 'Para');
-  const data = h('input', { class: 'ginput', type: 'date', value: hojeISO(), 'aria-label': 'Data', 'aria-required': 'true' });
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor a transferir', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
+  const de = selectConta(x ? x.de_conta : p.conta_id, 'De'), para = selectConta(x ? x.para_conta : outra.conta_id, 'Para');
+  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : hojeISO(), 'aria-label': 'Data', 'aria-required': 'true' });
+  const nota = h('input', { class: 'ginput', type: 'text', maxlength: '120', autocapitalize: 'sentences', placeholder: 'Opcional', 'aria-label': 'Descri\u00e7\u00e3o', value: x ? (x.nota || '') : '' });
   let s;
-  s = sheet('Transferir', [valor, h('div', { class: 'split', text: 'entre as tuas contas' }),
-    group(grow('De', de), grow('Para', para), grow('Data', data))
+  s = sheet(novo ? 'Transferir' : 'Editar transfer\u00eancia', [valor, h('div', { class: 'split', text: 'entre as tuas contas' }),
+    group(grow('De', de), grow('Para', para), grow('Data', data), grow('Descri\u00e7\u00e3o', nota)),
+    hint('N\u00e3o conta como gasto nem como ganho: o dinheiro s\u00f3 muda de conta.'),
+    x && x.recorrente_id ? hint('Vem de uma transfer\u00eancia fixa: mudar aqui s\u00f3 altera este m\u00eas.') : null,
+    novo ? null : botaoApagar('Apagar transfer\u00eancia', 'Apagar esta transfer\u00eancia?', 'Os saldos das duas contas voltam ao que eram.' + (x.recorrente_id ? ' A fixa n\u00e3o a volta a criar este m\u00eas.' : ''), async () => {
+      await q(sb.from('transferencias').delete().eq('id', x.id));
+      s.fechar(); await recarregar(); toast('Transfer\u00eancia apagada');
+    }, () => s)
   ], async () => {
     const v = validarValor(s, valor); if (v === null) return false;
     if (de.value === para.value) return s.erro('Escolhe duas contas diferentes.', para);
     if (!data.value) return s.erro('Indica a data.', data);
-    await q(sb.from('transferencias').insert({ de_conta: Number(de.value), para_conta: Number(para.value), valor: v, data: data.value }));
+    const payload = { de_conta: Number(de.value), para_conta: Number(para.value), valor: v, data: data.value, nota: nota.value.trim() || null };
+    if (novo) await q(sb.from('transferencias').insert(payload));
+    else await q(sb.from('transferencias').update(payload).eq('id', x.id));
     await recarregar();
-    toast('Transferido ' + fmt(v));
+    toast(novo ? 'Transferido ' + fmt(v) : 'Transfer\u00eancia atualizada');
   });
-  valor.focus();
+  if (novo) valor.focus();
 }
 
 // ===================== Agenda =====================
@@ -1232,7 +1284,7 @@ const horario = ev => (ev.dia_inteiro || !ev.hora_inicio ? 'Todo o dia' : hhmm(e
 const FEED = SUPABASE_URL.replace('https://', '') + '/functions/v1/calendario';
 
 // Repeti\u00e7\u00f5es: as mesmas regras do RRULE do feed (dias que n\u00e3o existem no m\u00eas s\u00e3o saltados)
-function ocorreEm(ev, iso) {
+function comecaEm(ev, iso) {
   if (ev.data === iso) return true;
   if (iso < ev.data || ev.repete === 'nunca') return false;
   const [y1, m1, d1] = ev.data.split('-').map(Number), [y2, m2, d2] = iso.split('-').map(Number);
@@ -1241,12 +1293,19 @@ function ocorreEm(ev, iso) {
   if (ev.repete === 'anual') return d1 === d2 && m1 === m2;
   return false;
 }
+const duracao = ev => (ev.data_fim && ev.data_fim > ev.data ? diasEntre(ev.data, ev.data_fim) : 0);
+// Dia k (0 = primeiro) da ocorr\u00eancia do evento que cobre iso, ou -1
+function posicaoEm(ev, iso) {
+  const dur = duracao(ev);
+  for (let k = 0; k <= dur; k++) if (comecaEm(ev, somaDias(iso, -k))) return k;
+  return -1;
+}
 function itensDoMes(m) {
   const res = {}, ud = ultimoDia(m);
   const add = (iso, it) => { (res[iso] = res[iso] || []).push(it); };
   for (let d = 1; d <= ud; d++) {
     const iso = m.slice(0, 8) + pad2(d);
-    S.eventos.forEach(ev => { if (ocorreEm(ev, iso)) add(iso, { tipo: 'evento', agenda: ev.agenda, ev: ev }); });
+    S.eventos.forEach(ev => { const k = posicaoEm(ev, iso); if (k >= 0) add(iso, { tipo: 'evento', agenda: ev.agenda, ev: ev, k: k, dur: duracao(ev) }); });
   }
   S.fixas.filter(f => f.ativa).forEach(f => {
     const iso = m.slice(0, 8) + pad2(Math.min(f.dia_vencimento, ud));
@@ -1254,7 +1313,15 @@ function itensDoMes(m) {
   });
   return res;
 }
-const chaveOrdem = it => (it.tipo === 'pagamento' ? '0' : it.ev.dia_inteiro || !it.ev.hora_inicio ? '1' : '2' + it.ev.hora_inicio);
+const chaveOrdem = it => (it.tipo === 'pagamento' ? '0' : it.ev.dia_inteiro || !it.ev.hora_inicio || it.k > 0 ? '1' : '2' + it.ev.hora_inicio);
+// Hor\u00e1rio de um evento num dos seus dias (v\u00e1rios dias: come\u00e7a / dia n de N / termina)
+function horarioDia(ev, k, dur) {
+  if (!dur) return horario(ev);
+  const parte = 'Dia ' + (k + 1) + ' de ' + (dur + 1);
+  if (ev.dia_inteiro || !ev.hora_inicio || (k > 0 && k < dur)) return 'Todo o dia \u00b7 ' + parte;
+  if (k === 0) return 'Come\u00e7a \u00e0s ' + hhmm(ev.hora_inicio) + ' \u00b7 ' + parte;
+  return (ev.hora_fim ? 'Termina \u00e0s ' + hhmm(ev.hora_fim) : '\u00daltimo dia') + ' \u00b7 ' + parte;
+}
 
 function linhaItemAgenda(it) {
   if (it.tipo === 'pagamento') {
@@ -1273,7 +1340,7 @@ function linhaItemAgenda(it) {
     h('span', { class: 'barra ag-' + ev.agenda, 'aria-hidden': 'true' }),
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: ev.titulo }),
-      h('div', { class: 'rsub', text: [horario(ev), ev.local, nomeAg(ev.agenda), ev.repete !== 'nunca' ? REPETE.find(r => r[1] === ev.repete)[0] : null].filter(Boolean).join(' \u00b7 ') })),
+      h('div', { class: 'rsub', text: [horarioDia(ev, it.k || 0, it.dur || 0), ev.local, nomeAg(ev.agenda), ev.repete !== 'nunca' ? REPETE.find(r => r[1] === ev.repete)[0] : null].filter(Boolean).join(' \u00b7 ') })),
     h('span', { class: 'chev', text: '\u203a', 'aria-hidden': 'true' }));
 }
 
@@ -1321,11 +1388,19 @@ function abrirEvento(ev, dataPreset) {
   const novo = !ev;
   const titulo = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', maxlength: '120', placeholder: 'Ex.: Jantar com a ' + ELA(), 'aria-label': 'T\u00edtulo', 'aria-required': 'true', value: ev ? ev.titulo : '', style: 'text-align:left' });
   const data = h('input', { class: 'ginput', type: 'date', value: ev ? ev.data : (dataPreset || hojeISO()), 'aria-label': 'Data', 'aria-required': 'true' });
+  const dataFim = h('input', { class: 'ginput', type: 'date', value: ev ? (ev.data_fim || ev.data) : data.value, 'aria-label': 'Data de fim', 'aria-required': 'true' });
+  // mudar o in\u00edcio arrasta o fim (mant\u00e9m a dura\u00e7\u00e3o), como no Calend\u00e1rio do iPhone
+  let dataAnt = data.value;
+  const arrastar = () => {
+    if (data.value && dataAnt && dataFim.value && data.value !== dataAnt) dataFim.value = somaDias(data.value, Math.max(0, diasEntre(dataAnt, dataFim.value)));
+    if (data.value) dataAnt = data.value;
+  };
+  data.addEventListener('input', arrastar); data.addEventListener('change', arrastar);
   const swDia = interruptor(ev ? ev.dia_inteiro : false, 'Todo o dia');
   const ini = h('input', { class: 'ginput', type: 'time', value: ev ? hhmm(ev.hora_inicio) : '', 'aria-label': 'In\u00edcio' });
   const fim = h('input', { class: 'ginput', type: 'time', value: ev ? hhmm(ev.hora_fim) : '', 'aria-label': 'Fim' });
-  const rIni = grow('In\u00edcio', ini), rFim = grow('Fim', fim);
-  const drawDia = () => { rIni.hidden = rFim.hidden = swDia.checked; };
+  const rIni = grow('Come\u00e7a', h('div', { class: 'inline datahora' }, data, ini)), rFim = grow('Termina', h('div', { class: 'inline datahora' }, dataFim, fim));
+  const drawDia = () => { ini.hidden = fim.hidden = swDia.checked; };
   swDia.addEventListener('change', drawDia); drawDia();
   const agenda = escolha(AGENDAS.map(a => [nomeAg(a), a]), ev ? ev.agenda : 'pessoal', 'Agenda', true);
   const repete = escolha(REPETE, ev ? ev.repete : 'nunca', 'Repeti\u00e7\u00e3o');
@@ -1336,7 +1411,7 @@ function abrirEvento(ev, dataPreset) {
   s = sheet(novo ? 'Novo evento' : 'Editar evento', [
     group(h('div', { class: 'pad' }, titulo)),
     glabel('Agenda', 'h3'), group(h('div', { class: 'pad' }, agenda.el)),
-    group(grow('Data', data), grow('Todo o dia', swDia), rIni, rFim),
+    group(grow('Todo o dia', swDia), rIni, rFim),
     glabel('Repeti\u00e7\u00e3o', 'h3'), group(h('div', { class: 'pad' }, repete.el)),
     glabel('Alerta no iPhone', 'h3'), group(h('div', { class: 'pad' }, alerta.el)),
     group(grow('Local', local), grow('Notas', notas)),
@@ -1348,11 +1423,16 @@ function abrirEvento(ev, dataPreset) {
     const t = titulo.value.trim();
     if (!t) return s.erro('D\u00e1 um t\u00edtulo ao evento.', titulo);
     if (!data.value) return s.erro('Indica a data.', data);
+    const df = dataFim.value || data.value;
+    if (df < data.value) return s.erro('O fim tem de ser no pr\u00f3prio dia ou depois do in\u00edcio.', dataFim);
+    if (diasEntre(data.value, df) > 366) return s.erro('Um evento pode durar no m\u00e1ximo um ano.', dataFim);
+    const varios = df > data.value;
     const dia = swDia.checked;
     if (!dia && !ini.value) return s.erro('Indica a hora de in\u00edcio ou marca \u00abTodo o dia\u00bb.', ini);
-    if (!dia && fim.value && fim.value <= ini.value) return s.erro('O fim tem de ser depois do in\u00edcio.', fim);
+    if (!dia && !varios && fim.value && fim.value <= ini.value) return s.erro('O fim tem de ser depois do in\u00edcio.', fim);
+    if (!dia && varios && !fim.value) return s.erro('Indica a hora a que termina.', fim);
     const payload = {
-      titulo: t, agenda: agenda.valor(), data: data.value, dia_inteiro: dia,
+      titulo: t, agenda: agenda.valor(), data: data.value, data_fim: df, dia_inteiro: dia,
       hora_inicio: dia ? null : ini.value, hora_fim: dia ? null : (fim.value || null),
       repete: repete.valor(), alerta_min: alerta.valor(),
       local: local.value.trim() || null, notas: notas.value.trim() || null
@@ -1477,7 +1557,7 @@ async function entrar(user) {
 
 sb.auth.onAuthStateChange(ev => {
   if (ev === 'SIGNED_OUT') {
-    S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = []; S.contas = []; S.eventos = []; S.diaSel = null;
+    S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = []; S.contas = []; S.eventos = []; S.transf = []; S.diaSel = null;
     S.calc = { init: false, eu: '', ela: '', valor: '' };
     setTimeout(renderLogin, 0);
   }
