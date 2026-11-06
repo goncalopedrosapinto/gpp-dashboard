@@ -1,0 +1,6 @@
+{
+  "name": "gpp-dashboard-e2e",
+  "private": true,
+  "scripts": { "test": "node test.js" },
+  "dependencies": { "@supabase/supabase-js": "2.118.0", "pg": "^8.13.0" }
+}
