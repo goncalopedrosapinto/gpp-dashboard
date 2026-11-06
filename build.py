@@ -11,6 +11,9 @@ DIST = os.path.join(BASE, 'docs')
 os.makedirs(DIST, exist_ok=True)
 
 html = open(SRC, encoding='utf-8').read()
+APP = os.path.join(BASE, 'src', 'app.js')
+html = html.replace('/*APP_JS*/', open(APP, encoding='utf-8').read())
+assert '/*APP_JS*/' not in html
 
 def esc(m):
     out = []

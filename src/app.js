@@ -1,0 +1,738 @@
+(function () {
+'use strict';
+
+// ===================== Configuração =====================
+const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
+const VERSAO = 'v1.2 · nov 2026';
+const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
+const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
+const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
+const TABS = ['mes', 'despesas', 'ganhos', 'calcular', 'fixas'];
+
+const app = document.getElementById('app');
+if (!window.supabase || !window.supabase.createClient) {
+  app.textContent = 'Não foi possível carregar a ligação ao servidor. Verifica a internet e abre outra vez.';
+  return;
+}
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'gpp-dashboard-auth' }
+});
+
+const S = {
+  user: null, config: null, tab: 'mes', mes: null, filtro: 'todas', loading: false, seq: 0,
+  despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [],
+  calc: { init: false, eu: '', ela: '', valor: '' }
+};
+
+// ===================== Utilitários =====================
+function h(tag, props) {
+  const el = document.createElement(tag);
+  if (props) {
+    for (const k of Object.keys(props)) {
+      const v = props[k];
+      if (v == null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k === 'value') el.value = v;
+      else if (k.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(k.slice(2), v);
+      else if (typeof v === 'boolean' && k in el) el[k] = v;
+      else el.setAttribute(k, v === true ? '' : String(v));
+    }
+  }
+  for (let i = 2; i < arguments.length; i++) append(el, arguments[i]);
+  return el;
+}
+function append(el, kid) {
+  if (kid == null || kid === false) return;
+  if (Array.isArray(kid)) { kid.forEach(k => append(el, k)); return; }
+  el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+const ICONS = {
+  mes: ['M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
+  despesas: ['M12 21V9', 'M7 14l5-5 5 5', 'M5 3h14'],
+  ganhos: ['M12 3v12', 'M7 10l5 5 5-5', 'M5 21h14'],
+  calcular: ['M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z', 'M8.5 7.5h7', 'M9 12h.01', 'M12 12h.01', 'M15 12h.01', 'M9 16h.01', 'M12 16h.01', 'M15 16h.01'],
+  fixas: ['M17 2l4 4-4 4', 'M3 11V9a3 3 0 0 1 3-3h15', 'M7 22l-4-4 4-4', 'M21 13v2a3 3 0 0 1-3 3H3'],
+  ajustes: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6']
+};
+function icon(paths) {
+  const s = document.createElementNS(SVGNS, 'svg');
+  const at = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.9', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' };
+  Object.keys(at).forEach(k => s.setAttribute(k, at[k]));
+  paths.forEach(d => { const p = document.createElementNS(SVGNS, 'path'); p.setAttribute('d', d); s.append(p); });
+  return s;
+}
+
+const EUR = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
+const fmt = v => EUR.format(Number(v) || 0);
+const r2 = x => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
+const ok = n => typeof n === 'number' && isFinite(n);
+const soma = (arr, f) => r2(arr.reduce((a, x) => a + (Number(f(x)) || 0), 0));
+const pctTxt = n => String(Math.round(n * 10) / 10).replace('.', ',') + '%';
+function parseNum(s) {
+  if (s == null) return null;
+  let t = String(s).replace(/[^0-9,.\-]/g, '');
+  if (!t) return null;
+  if (/,\d{1,2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
+  else t = t.replace(/,/g, '');
+  const n = Number(t);
+  return ok(n) ? r2(n) : NaN;
+}
+const toInput = v => (v == null || v === '') ? '' : Number(v).toFixed(2).replace('.', ',');
+const pad2 = n => String(n).padStart(2, '0');
+const iso = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+const hojeISO = () => iso(new Date());
+const mesAtual = () => hojeISO().slice(0, 8) + '01';
+function addMes(m, n) { const [y, mo] = m.split('-').map(Number); return iso(new Date(y, mo - 1 + n, 1)); }
+function ultimoDia(m) { const [y, mo] = m.split('-').map(Number); return new Date(y, mo, 0).getDate(); }
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+function nomeMes(m) {
+  const [y, mo] = m.split('-').map(Number);
+  return cap(new Intl.DateTimeFormat('pt-PT', { month: 'long' }).format(new Date(y, mo - 1, 1))) + ' ' + y;
+}
+const mesMin = m => nomeMes(m).replace(/^./, c => c.toLowerCase());
+function diaLongo(d) {
+  const [y, mo, da] = d.split('-').map(Number);
+  const t = new Intl.DateTimeFormat('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date(y, mo - 1, da));
+  return (d === hojeISO() ? 'Hoje · ' : '') + t;
+}
+function diaCurto(d) {
+  if (d === hojeISO()) return 'Hoje';
+  const [y, mo, da] = d.split('-').map(Number);
+  return da + ' ' + new Intl.DateTimeFormat('pt-PT', { month: 'short' }).format(new Date(y, mo - 1, da)).replace('.', '');
+}
+function dividirLocal(v, a, b) {
+  const t = a + b;
+  if (!(t > 0) || !(v > 0)) return null;
+  const eu = r2(v * a / t);
+  return { eu: eu, ela: r2(v - eu) };
+}
+const nomeEla = () => ((S.config && S.config.nome_ela) || '').trim();
+const ELA = () => nomeEla() || 'Ela';
+const DA = () => nomeEla() ? 'da ' + nomeEla() : 'dela';
+
+// Conta partilhada: quanto te custa e em que estado está
+const parte = x => (x.partilhada && x.parte_dela != null) ? Number(x.parte_dela) : 0;
+const recebidoDe = x => (x.partilhada && x.recebido) ? parte(x) : 0;
+const custo = x => r2(Number(x.valor) - recebidoDe(x));
+const porReceber = x => x.partilhada && !x.recebido;
+const porRever = x => x.origem === 'apple_pay' && !x.categoria;
+
+let toastT;
+function toast(msg, bad) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show' + (bad ? ' bad' : '');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { t.className = ''; }, 2800);
+}
+function traduzErro(e) {
+  const m = (e && (e.message || e.error_description || e.msg)) || String(e);
+  if (/invalid login credentials/i.test(m)) return 'Email ou palavra-passe errados.';
+  if (/email not confirmed/i.test(m)) return 'Conta por confirmar. Confirma o utilizador no Supabase.';
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return 'Sem ligação. Tenta outra vez.';
+  if (/jwt|session|refresh token/i.test(m)) return 'A sessão expirou. Entra outra vez.';
+  if (/parte_dela_ck/.test(m)) return 'A parte ' + DA() + ' não pode ser maior que o total.';
+  return 'Erro: ' + m;
+}
+function erro(e) { console.error(e); toast(traduzErro(e), true); }
+async function q(p) { const r = await p; if (r.error) throw r.error; return r.data; }
+
+function copiar(txt) {
+  const fallback = () => {
+    const ta = h('textarea', { style: 'position:fixed;top:-100px;opacity:0' });
+    ta.value = txt; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); toast('Copiado'); } catch (e) { toast('Não deu para copiar', true); }
+    ta.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(() => toast('Copiado'), fallback);
+  else fallback();
+}
+
+// Blocos de interface
+const group = (...rows) => h('div', { class: 'group' }, rows);
+const grow = (label, control) => h('div', { class: 'grow' }, typeof label === 'string' ? h('span', { class: 'glab', text: label }) : label, control);
+const kv = (k, v, cls) => grow(k, h('span', { class: 'gval num' + (cls ? ' ' + cls : ''), text: v }));
+const glabel = t => h('div', { class: 'glabel', text: t });
+const hint = (t, cls) => h('p', { class: 'hint' + (cls ? ' ' + cls : ''), text: t });
+const vazio = t => h('p', { class: 'empty', text: t });
+
+function campoValor(valor, label, extra) {
+  return h('input', Object.assign({ class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: toInput(valor), 'aria-label': label }, extra || {}));
+}
+function chips(lista, st) {
+  const box = h('div', { class: 'chips' });
+  const draw = () => box.replaceChildren(...lista.map(c => h('button', {
+    type: 'button', class: 'chip' + (st.categoria === c ? ' on' : ''), text: c,
+    onclick: () => { st.categoria = st.categoria === c ? null : c; draw(); }
+  })));
+  draw();
+  return box;
+}
+function botaoApagar(rotulo, acao) {
+  let armado = false, t;
+  const b = h('button', { type: 'button', class: 'btn danger', text: rotulo });
+  b.addEventListener('click', async () => {
+    if (!armado) {
+      armado = true; b.textContent = 'Toca outra vez para apagar';
+      t = setTimeout(() => { armado = false; b.textContent = rotulo; }, 3000);
+      return;
+    }
+    clearTimeout(t); b.disabled = true;
+    try { await acao(); } catch (e) { erro(e); b.disabled = false; }
+  });
+  return b;
+}
+function sheet(titulo, conteudo, onSave) {
+  const back = h('div', { class: 'backdrop' });
+  const guardar = h('button', { class: 'link b', type: 'button', text: 'Guardar' });
+  function fechar() { back.remove(); document.body.classList.remove('noscroll'); }
+  const panel = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': titulo },
+    h('div', { class: 'grab' }),
+    h('div', { class: 'snav' },
+      h('button', { class: 'link', type: 'button', text: 'Cancelar', onclick: fechar }),
+      h('div', { class: 'stitle', text: titulo }),
+      h('div', { class: 'r' }, guardar)),
+    conteudo);
+  back.append(panel);
+  back.addEventListener('click', e => { if (e.target === back) fechar(); });
+  guardar.addEventListener('click', async () => {
+    guardar.disabled = true;
+    try { const r = await onSave(); if (r !== false) fechar(); }
+    catch (e) { erro(e); }
+    finally { guardar.disabled = false; }
+  });
+  document.body.append(back);
+  document.body.classList.add('noscroll');
+  return { fechar: fechar };
+}
+
+// ===================== Dados =====================
+async function carregarMes() {
+  const m = S.mes, seq = ++S.seq;
+  S.loading = true;
+  try {
+    if (m <= mesAtual()) await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
+    const res = await Promise.all([
+      q(sb.from('despesas').select('*').eq('mes', m).order('data', { ascending: false }).order('id', { ascending: false })),
+      q(sb.from('ganhos').select('*').eq('mes', m).order('data', { ascending: false }).order('id', { ascending: false })),
+      q(sb.from('despesas').select('*').eq('partilhada', true).eq('recebido', false).order('data', { ascending: false }).order('id', { ascending: false })),
+      q(sb.from('proximos_pagamentos').select('*').order('data_vencimento').limit(5))
+    ]);
+    if (seq !== S.seq) return;
+    S.despesas = res[0] || [];
+    S.ganhos = res[1] || [];
+    S.aReceber = res[2] || [];
+    S.proximos = res[3] || [];
+  } catch (e) { if (seq === S.seq) erro(e); }
+  finally { if (seq === S.seq) S.loading = false; }
+}
+async function carregarFixas() {
+  try {
+    S.fixas = await q(sb.from('despesas_recorrentes').select('*').order('ativa', { ascending: false }).order('dia_vencimento').order('nome'));
+  } catch (e) { erro(e); }
+}
+async function recarregar() { await carregarMes(); render(); }
+async function guardarConfig(campos, silencioso) {
+  try {
+    await q(sb.from('config').update(campos).eq('owner', S.user.id));
+    Object.assign(S.config, campos);
+    if (!silencioso) { render(); toast('Guardado'); }
+  } catch (e) { erro(e); }
+}
+async function marcarRecebido(x) {
+  if (x.parte_dela == null) { abrirDespesa(x); return; }
+  try {
+    await q(sb.from('despesas').update({ recebido: true }).eq('id', x.id));
+    await recarregar();
+    toast('Recebido: ' + fmt(x.parte_dela));
+  } catch (e) { erro(e); }
+}
+
+// ===================== Ecrãs =====================
+function tagsPartilha(x) {
+  if (!x.partilhada) return null;
+  if (x.parte_dela == null) return 'Partilhada · parte ' + DA() + ' por definir';
+  return x.recebido ? ELA() + ' pagou ' + fmt(x.parte_dela) : ELA() + ' deve ' + fmt(x.parte_dela);
+}
+
+function viewMes() {
+  if (S.loading && !S.despesas.length && !S.ganhos.length) return [vazio('A carregar…')];
+  const out = [];
+  const ganhos = soma(S.ganhos, x => x.valor);
+  const gastos = soma(S.despesas, x => x.valor);
+  const recebido = soma(S.despesas, recebidoDe);
+  const custoLiq = r2(gastos - recebido);
+  const saldo = r2(ganhos - custoLiq);
+  const aVencer = S.despesas.some(x => x.data > hojeISO());
+
+  out.push(glabel('Saldo de ' + mesMin(S.mes)), group(
+    h('div', { class: 'hero' },
+      h('div', { class: 'k', text: S.ganhos.length ? 'Ganhos menos custo líquido' : 'Ainda sem ganhos registados este mês' }),
+      h('div', { class: 'big ' + (saldo >= 0 ? 'pos' : 'neg'), text: fmt(saldo) })),
+    kv('Ganhos', fmt(ganhos)),
+    kv('Gastos (total pago)', fmt(gastos)),
+    recebido > 0 ? kv('Recebido ' + DA(), '− ' + fmt(recebido), 'pos') : null,
+    kv('Custo líquido', fmt(custoLiq), 'strong')
+  ), aVencer ? hint('Inclui despesas fixas que ainda vencem este mês.') : null);
+
+  // A receber (todos os meses)
+  if (S.aReceber.length) {
+    const total = soma(S.aReceber, parte);
+    const semParte = S.aReceber.filter(x => x.parte_dela == null).length;
+    out.push(glabel('A receber ' + DA()), group(
+      h('div', { class: 'hero' },
+        h('div', { class: 'k', text: S.aReceber.length + (S.aReceber.length === 1 ? ' conta partilhada' : ' contas partilhadas') }),
+        h('div', { class: 'big', text: fmt(total) })),
+      S.aReceber.map(x => h('div', { class: 'lrow' },
+        h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
+          h('div', { class: 'rtitle', text: x.descricao || x.comerciante || 'Sem descrição' }),
+          h('div', { class: 'rsub', text: diaCurto(x.data) + ' · total ' + fmt(x.valor) })),
+        h('div', { class: 'rval', text: x.parte_dela != null ? fmt(x.parte_dela) : '—' }),
+        h('button', { type: 'button', class: 'mini', text: x.parte_dela != null ? 'Recebi' : 'Definir', onclick: () => marcarRecebido(x) })))
+    ), semParte ? hint(semParte + (semParte === 1 ? ' conta sem' : ' contas sem') + ' a parte ' + DA() + ' definida.', 'warn') : null);
+  }
+
+  // Por categoria (custo líquido)
+  const cats = {};
+  S.despesas.forEach(x => { const c = x.categoria || 'Sem categoria'; cats[c] = (cats[c] || 0) + custo(x); });
+  const lista = Object.keys(cats).map(c => [c, r2(cats[c])]).filter(c => c[1] > 0).sort((a, b) => b[1] - a[1]);
+  if (lista.length) {
+    const max = lista[0][1] || 1;
+    out.push(glabel('Para onde foi o teu dinheiro'), group(lista.map(([c, v]) => h('div', { class: 'catrow' },
+      h('div', { class: 'cattop' }, h('span', { text: c }), h('span', { class: 'num gval', text: fmt(v) })),
+      h('div', { class: 'bar', style: 'width:' + Math.max(2, Math.round(v / max * 100)) + '%' })))));
+  }
+
+  out.push(glabel('Próximos pagamentos'));
+  if (S.proximos.length) {
+    out.push(group(S.proximos.map(x => h('div', { class: 'lrow' },
+      h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
+        h('div', { class: 'rsub', text: diaCurto(x.data_vencimento) + (x.partilhada ? ' · Partilhada' : '') })),
+      h('div', { class: 'rval', text: fmt(x.valor) })))));
+  } else out.push(hint('Sem despesas fixas. Adiciona-as no separador Fixas.'));
+  return out;
+}
+
+const FILTROS = { todas: () => true, rever: porRever, partilhadas: x => x.partilhada, receber: porReceber };
+function linhaDespesa(x) {
+  const tags = [];
+  if (x.categoria) tags.push(x.categoria); else if (x.origem === 'apple_pay') tags.push('Por rever');
+  if (x.origem === 'apple_pay') tags.push('Apple Pay');
+  if (x.origem === 'recorrente') tags.push('Fixa');
+  const tp = tagsPartilha(x); if (tp) tags.push(tp);
+  if (x.data > hojeISO()) tags.push('a vencer');
+  return h('button', { type: 'button', class: 'lrow', onclick: () => abrirDespesa(x) },
+    h('div', { class: 'rmain' },
+      h('div', { class: 'rtitle', text: x.descricao || x.comerciante || 'Sem descrição' }),
+      h('div', { class: 'rsub' + (porRever(x) ? ' warn' : ''), text: tags.join(' · ') })),
+    h('div', { class: 'rval', text: fmt(x.valor) }),
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
+}
+function viewDespesas() {
+  const nRever = S.despesas.filter(porRever).length, nRec = S.despesas.filter(porReceber).length;
+  const filtros = [['todas', 'Todos'], ['rever', 'Por rever' + (nRever ? ' (' + nRever + ')' : '')], ['partilhadas', 'Partilhados'], ['receber', 'A receber' + (nRec ? ' (' + nRec + ')' : '')]];
+  const out = [h('div', { class: 'chips scroll' }, filtros.map(([k, l]) => h('button', {
+    type: 'button', class: 'chip' + (S.filtro === k ? ' on' : ''), text: l, onclick: () => { S.filtro = k; render(); }
+  })))];
+  if (S.loading && !S.despesas.length) { out.push(vazio('A carregar…')); return out; }
+  const lista = S.despesas.filter(FILTROS[S.filtro]);
+  if (!lista.length) { out.push(vazio(S.filtro === 'rever' ? 'Nada por rever.' : 'Sem gastos em ' + mesMin(S.mes) + '.')); return out; }
+  out.push(hint(lista.length + (lista.length === 1 ? ' gasto · ' : ' gastos · ') + fmt(soma(lista, x => x.valor)) + ' · custo líquido ' + fmt(soma(lista, custo))));
+  let cur = null, g = null;
+  lista.forEach(x => {
+    if (x.data !== cur) { cur = x.data; out.push(glabel(diaLongo(cur))); g = group(); out.push(g); }
+    g.append(linhaDespesa(x));
+  });
+  return out;
+}
+
+function viewGanhos() {
+  if (S.loading && !S.ganhos.length) return [vazio('A carregar…')];
+  if (!S.ganhos.length) return [vazio('Sem ganhos em ' + mesMin(S.mes) + '. Toca em + para registar o salário.')];
+  const out = [glabel('Total de ' + mesMin(S.mes)), group(h('div', { class: 'hero' }, h('div', { class: 'big pos', text: fmt(soma(S.ganhos, x => x.valor)) })))];
+  out.push(glabel('Lançamentos'), group(S.ganhos.map(x => h('button', { type: 'button', class: 'lrow', onclick: () => abrirGanho(x) },
+    h('div', { class: 'rmain' },
+      h('div', { class: 'rtitle', text: x.descricao || x.categoria || 'Ganho' }),
+      h('div', { class: 'rsub', text: [diaCurto(x.data), x.categoria].filter(Boolean).join(' · ') })),
+    h('div', { class: 'rval pos', text: fmt(x.valor) }),
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))));
+  return out;
+}
+
+function resetCalc() {
+  const c = S.config || {};
+  const ganhosMes = soma(S.ganhos, x => x.valor);
+  S.calc.eu = c.calc_eu != null ? toInput(c.calc_eu) : (ganhosMes > 0 ? toInput(ganhosMes) : '');
+  S.calc.ela = c.calc_ela != null ? toInput(c.calc_ela) : '';
+  S.calc.init = true;
+}
+function viewCalcular() {
+  if (!S.calc.init) resetCalc();
+  const inV = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.valor, 'aria-label': 'Valor a dividir' });
+  const inEu = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.eu, 'aria-label': 'O meu rendimento' });
+  const inEla = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.ela, 'aria-label': 'Rendimento ' + DA() });
+  const kEu = h('div', { class: 'k' }), kEla = h('div', { class: 'k' });
+  const rEu = h('div', { class: 'big', 'data-r': 'eu' }), rEla = h('div', { class: 'big', 'data-r': 'ela' });
+  const reg = h('button', { class: 'btn primary', type: 'button', text: 'Registar como gasto partilhado' });
+  let s = null;
+  function upd() {
+    S.calc.valor = inV.value; S.calc.eu = inEu.value; S.calc.ela = inEla.value;
+    const a = parseNum(inEu.value), b = parseNum(inEla.value), v = parseNum(inV.value);
+    s = ok(a) && ok(b) && a >= 0 && b >= 0 ? dividirLocal(ok(v) ? v : 0, a, b) : null;
+    const pa = ok(a) && ok(b) && a + b > 0 ? a / (a + b) * 100 : null;
+    kEu.textContent = 'Tu' + (pa != null ? ' · ' + pctTxt(pa) : '');
+    kEla.textContent = ELA() + (pa != null ? ' · ' + pctTxt(100 - pa) : '');
+    rEu.textContent = s ? fmt(s.eu) : '—';
+    rEla.textContent = s ? fmt(s.ela) : '—';
+    reg.disabled = !s;
+  }
+  [inV, inEu, inEla].forEach(i => i.addEventListener('input', upd));
+  inEu.addEventListener('change', () => { const v = parseNum(inEu.value); if (v === null || (ok(v) && v >= 0)) guardarConfig({ calc_eu: v }, true); });
+  inEla.addEventListener('change', () => { const v = parseNum(inEla.value); if (v === null || (ok(v) && v >= 0)) guardarConfig({ calc_ela: v }, true); });
+  reg.addEventListener('click', () => { if (s) abrirDespesa(null, { valor: parseNum(inV.value), partilhada: true, parte_dela: s.ela }); });
+  upd();
+  return [
+    glabel('Valor da conta'),
+    group(h('div', { class: 'pad' }, inV)),
+    h('div', { class: 'duo' }, group(h('div', { class: 'hero' }, kEu, rEu)), group(h('div', { class: 'hero' }, kEla, rEla))),
+    glabel('Rendimentos líquidos'),
+    group(grow('Eu', inEu), grow(ELA(), inEla)),
+    hint('A divisão é proporcional ao que cada um ganha. Os rendimentos ficam guardados para a próxima vez.'),
+    reg,
+    hint('Ao registar, o gasto entra pelo total e a parte ' + DA() + ' fica a receber.')
+  ];
+}
+
+function viewFixas() {
+  const ativas = S.fixas.filter(x => x.ativa);
+  const total = soma(ativas, x => x.valor);
+  const partesDela = soma(ativas, parte);
+  const out = [glabel('Por mês'), group(
+    kv('Total das fixas ativas', fmt(total), 'strong'),
+    partesDela > 0 ? kv('Parte ' + DA(), '− ' + fmt(partesDela), 'pos') : null,
+    partesDela > 0 ? kv('O teu custo fixo', fmt(r2(total - partesDela))) : null
+  )];
+  out.push(glabel('Despesas fixas'));
+  if (!S.fixas.length) { out.push(hint('Ainda não tens fixas. Toca em + para adicionar o crédito, a água, o ginásio…')); return out; }
+  out.push(group(S.fixas.map(x => h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
+    h('div', { class: 'rmain' },
+      h('div', { class: 'rtitle', text: x.nome }),
+      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.categoria,
+        x.partilhada ? (x.parte_dela != null ? ELA() + ' paga ' + fmt(x.parte_dela) : 'Partilhada') : null,
+        x.ativa ? null : 'Pausada'].filter(Boolean).join(' · ') })),
+    h('div', { class: 'rval', text: fmt(x.valor) }),
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))));
+  out.push(hint('Cada fixa entra sozinha em Gastos todos os meses. Se apagares a deste mês, não volta a aparecer.'));
+  return out;
+}
+
+function linhaCopiar(label, valor, mostrar) {
+  return grow(h('span', { class: 'glab', text: label }),
+    h('div', { style: 'display:flex;align-items:center;gap:10px;min-width:0' },
+      h('span', { class: 'mono', text: mostrar || valor }),
+      h('button', { type: 'button', class: 'link b', text: 'Copiar', 'aria-label': 'Copiar ' + label, onclick: () => copiar(valor) })));
+}
+function viewAjustes() {
+  const c = S.config || {};
+  const nome = h('input', { class: 'ginput', type: 'text', placeholder: 'Bia', maxlength: '40', value: c.nome_ela || '', autocapitalize: 'words', 'aria-label': 'Nome dela' });
+  nome.addEventListener('keydown', e => { if (e.key === 'Enter') nome.blur(); });
+  nome.addEventListener('change', () => guardarConfig({ nome_ela: nome.value.trim() || null }));
+  const sw = h('input', { type: 'checkbox', class: 'switch', checked: !!c.apple_pay_partilhada_default, 'aria-label': 'Apple Pay entra como partilhado' });
+  sw.addEventListener('change', () => guardarConfig({ apple_pay_partilhada_default: sw.checked }));
+  const url = SUPABASE_URL + '/rest/v1/rpc/registar_apple_pay';
+  const tk = c.token_atalho || '';
+  return [
+    glabel('Contas partilhadas com'),
+    group(grow('Nome', nome)),
+
+    glabel('Apple Pay'),
+    group(grow('Novos gastos são partilhados', sw)),
+    hint('Quando corriges um gasto Apple Pay, o comerciante fica memorizado e os próximos já entram certos.'),
+
+    glabel('Atalho do iPhone · registo automático'),
+    group(
+      linhaCopiar('URL', url, url.replace('https://', '')),
+      linhaCopiar('Chave', SUPABASE_KEY, SUPABASE_KEY.slice(0, 18) + '…'),
+      linhaCopiar('Token', tk, tk ? tk.slice(0, 8) + '…' + tk.slice(-4) : '—')
+    ),
+    group(h('ol', { class: 'steps' },
+      h('li', null, 'Atalhos › ', h('b', { text: 'Automação' }), ' › + › ', h('b', { text: 'Carteira' }), '. Escolhe os teus cartões e ativa ', h('b', { text: 'Executar imediatamente' }), '.'),
+      h('li', null, 'Nova automação vazia › ação ', h('b', { text: 'Obter conteúdo do URL' }), '. Cola o URL.'),
+      h('li', null, 'Método ', h('b', { text: 'POST' }), '. Cabeçalhos: ', h('b', { text: 'apikey' }), ' = Chave; ', h('b', { text: 'Content-Type' }), ' = application/json.'),
+      h('li', null, 'Corpo do pedido ', h('b', { text: 'JSON' }), ', 4 campos de texto: ', h('b', { text: 'token' }), ' = Token; ', h('b', { text: 'valor' }), ' = Entrada do atalho › Montante; ', h('b', { text: 'comerciante' }), ' = › Comerciante; ', h('b', { text: 'cartao' }), ' = › Nome.'),
+      h('li', null, 'Paga algo pequeno e confirma em Gastos › Por rever.')
+    )),
+    hint('O token é a tua chave pessoal: não o partilhes. Quem o tiver só consegue adicionar gastos, não ler os teus dados.'),
+
+    glabel('Conta'),
+    group(kv('Sessão', S.user ? S.user.email : '—')),
+    h('button', { type: 'button', class: 'btn danger', text: 'Terminar sessão', onclick: async () => { await sb.auth.signOut(); } }),
+    hint('GPP Dashboard ' + VERSAO)
+  ];
+}
+
+// ===================== Folhas de edição =====================
+function blocoPartilha(st, valorInput, comRecebido) {
+  // Liga/desliga partilha + parte dela (+ já recebi)
+  const sw = h('input', { type: 'checkbox', class: 'switch', checked: st.partilhada, 'aria-label': 'Partilhada' });
+  const inParte = campoValor(st.parte_dela, 'Parte ' + DA(), { placeholder: 'quanto paga' });
+  const metade = h('button', { type: 'button', class: 'link small2', text: 'Metade' });
+  const swRec = h('input', { type: 'checkbox', class: 'switch', checked: !!st.recebido, 'aria-label': 'Já recebi' });
+  const rowParte = grow('Parte ' + DA(), h('div', { class: 'inline' }, inParte, metade));
+  const rowRec = comRecebido ? grow('Já recebi', swRec) : null;
+  const info = h('div', { class: 'split' });
+  function draw() {
+    rowParte.hidden = !st.partilhada;
+    if (rowRec) rowRec.hidden = !st.partilhada;
+    const v = parseNum(valorInput.value), p = parseNum(inParte.value);
+    const mostra = st.partilhada && ok(v) && v > 0 && ok(p) && p > 0;
+    info.hidden = !mostra;
+    if (mostra) info.textContent = 'Custa-te ' + fmt(r2(v - p)) + ' · ' + ELA() + ' paga ' + fmt(p);
+  }
+  sw.addEventListener('change', () => { st.partilhada = sw.checked; draw(); });
+  swRec.addEventListener('change', () => { st.recebido = swRec.checked; });
+  inParte.addEventListener('input', draw);
+  valorInput.addEventListener('input', draw);
+  metade.addEventListener('click', () => { const v = parseNum(valorInput.value); if (ok(v) && v > 0) { inParte.value = toInput(r2(v / 2)); draw(); } });
+  draw();
+  return {
+    info: info,
+    group: group(grow(comRecebido ? 'Partilhada com ' + ELA() : 'Partilhada com ' + ELA(), sw), rowParte, rowRec),
+    ler: () => {
+      if (!st.partilhada) return { partilhada: false, parte_dela: null, recebido: false };
+      const p = parseNum(inParte.value);
+      return { partilhada: true, parte_dela: ok(p) ? p : null, recebido: comRecebido ? !!st.recebido : false, invalido: p !== null && (!ok(p) || p < 0) };
+    }
+  };
+}
+
+function abrirDespesa(x, preset) {
+  const novo = !x; preset = preset || {};
+  const st = {
+    categoria: x ? x.categoria : null,
+    partilhada: x ? !!x.partilhada : !!preset.partilhada,
+    parte_dela: x ? x.parte_dela : (ok(preset.parte_dela) ? preset.parte_dela : null),
+    recebido: x ? !!x.recebido : false
+  };
+  const dataDefault = S.mes === mesAtual() ? hojeISO() : S.mes;
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor',
+    value: x ? toInput(x.valor) : (ok(preset.valor) ? toInput(preset.valor) : '') });
+  const desc = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', 'aria-label': 'Descrição',
+    placeholder: x && x.comerciante ? x.comerciante : 'Ex.: Jantar', value: x ? (x.descricao || '') : '' });
+  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : dataDefault, 'aria-label': 'Data' });
+  const part = blocoPartilha(st, valor, true);
+
+  let origem = null;
+  if (x && x.origem === 'apple_pay') origem = ['Apple Pay', x.cartao, x.comerciante].filter(Boolean).join(' · ');
+  if (x && x.origem === 'recorrente') origem = 'Lançado a partir de uma despesa fixa';
+
+  let s;
+  const conteudo = [
+    valor, part.info,
+    origem ? hint(origem, 'center') : null,
+    group(grow('Descrição', desc), grow('Data', data)),
+    glabel('Categoria'),
+    group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
+    part.group,
+    x && x.origem === 'apple_pay' && x.comerciante ? h('p', { class: 'hint', style: 'margin-top:-10px', text: 'A categoria e a partilha ficam memorizadas para «' + x.comerciante + '».' }) : null,
+    novo ? null : botaoApagar('Apagar gasto', async () => {
+      await q(sb.from('despesas').delete().eq('id', x.id));
+      s.fechar(); await recarregar(); toast('Gasto apagado');
+    })
+  ];
+  s = sheet(novo ? 'Novo gasto' : 'Editar gasto', conteudo, async () => {
+    const v = parseNum(valor.value);
+    if (!ok(v) || v <= 0) { toast('Indica um valor maior que zero.', true); valor.focus(); return false; }
+    if (!data.value) { toast('Indica a data.', true); return false; }
+    const p = part.ler();
+    if (p.invalido) { toast('Parte ' + DA() + ' inválida.', true); return false; }
+    if (p.parte_dela != null && p.parte_dela > v) { toast('A parte ' + DA() + ' não pode ser maior que o total.', true); return false; }
+    const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria,
+      partilhada: p.partilhada, parte_dela: p.parte_dela, recebido: p.recebido };
+    if (novo) await q(sb.from('despesas').insert(payload));
+    else await q(sb.from('despesas').update(payload).eq('id', x.id));
+    const mesD = payload.data.slice(0, 8) + '01';
+    await recarregar();
+    toast(mesD === S.mes ? 'Guardado' : 'Guardado em ' + nomeMes(mesD));
+  });
+  if (novo && !ok(preset.valor)) setTimeout(() => valor.focus(), 260);
+}
+
+function abrirGanho(x) {
+  const novo = !x;
+  const st = { categoria: x ? x.categoria : 'Salário' };
+  const valor = h('input', { class: 'valorin pos', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor do ganho', value: x ? toInput(x.valor) : '' });
+  const desc = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Salário de novembro', 'aria-label': 'Descrição', value: x ? (x.descricao || '') : '' });
+  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : (S.mes === mesAtual() ? hojeISO() : S.mes), 'aria-label': 'Data' });
+  let s;
+  s = sheet(novo ? 'Novo ganho' : 'Editar ganho', [
+    valor, h('div', { class: 'split', text: 'líquido' }),
+    group(grow('Descrição', desc), grow('Data', data)),
+    glabel('Tipo'),
+    group(h('div', { class: 'pad' }, chips(CAT_GANHOS, st))),
+    novo ? null : botaoApagar('Apagar ganho', async () => {
+      await q(sb.from('ganhos').delete().eq('id', x.id));
+      s.fechar(); await recarregar(); toast('Ganho apagado');
+    })
+  ], async () => {
+    const v = parseNum(valor.value);
+    if (!ok(v) || v <= 0) { toast('Indica um valor maior que zero.', true); valor.focus(); return false; }
+    if (!data.value) { toast('Indica a data.', true); return false; }
+    const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria };
+    if (novo) await q(sb.from('ganhos').insert(payload));
+    else await q(sb.from('ganhos').update(payload).eq('id', x.id));
+    S.calc.init = false;
+    const mesG = payload.data.slice(0, 8) + '01';
+    await recarregar();
+    toast(mesG === S.mes ? 'Ganho guardado' : 'Guardado em ' + nomeMes(mesG));
+  });
+  if (novo) setTimeout(() => valor.focus(), 260);
+}
+
+function abrirFixa(x) {
+  const novo = !x;
+  const st = { categoria: x ? x.categoria : null, partilhada: x ? !!x.partilhada : false, parte_dela: x ? x.parte_dela : null, ativa: x ? !!x.ativa : true };
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', value: x ? toInput(x.valor) : '' });
+  const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', value: x ? x.nome : '' });
+  const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', value: x ? String(x.dia_vencimento) : '' });
+  const part = blocoPartilha(st, valor, false);
+  const swAtiva = h('input', { type: 'checkbox', class: 'switch', checked: st.ativa, 'aria-label': 'Ativa' });
+  swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
+  let s;
+  const conteudo = [
+    valor, part.info, h('div', { class: 'split', text: 'por mês' }),
+    group(grow('Nome', nome), grow('Dia do pagamento', dia)),
+    glabel('Categoria'),
+    group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
+    part.group,
+    novo ? null : group(grow('Ativa', swAtiva)),
+    h('p', { class: 'hint', style: 'margin-top:-10px', text: 'Entra sozinha em Gastos todos os meses. Se for partilhada, a parte ' + DA() + ' fica a receber até marcares que recebeste.' }),
+    novo ? null : botaoApagar('Apagar despesa fixa', async () => {
+      await q(sb.from('despesas_recorrentes').delete().eq('id', x.id));
+      s.fechar(); await carregarFixas(); await recarregar(); toast('Fixa apagada · os meses já lançados mantêm-se');
+    })
+  ];
+  s = sheet(novo ? 'Nova despesa fixa' : 'Editar despesa fixa', conteudo, async () => {
+    const v = parseNum(valor.value), d = parseInt(dia.value, 10), n = nome.value.trim();
+    if (!n) { toast('Dá um nome à despesa.', true); nome.focus(); return false; }
+    if (!ok(v) || v <= 0) { toast('Indica um valor maior que zero.', true); valor.focus(); return false; }
+    if (!(d >= 1 && d <= 31)) { toast('O dia tem de ser entre 1 e 31.', true); dia.focus(); return false; }
+    const p = part.ler();
+    if (p.invalido) { toast('Parte ' + DA() + ' inválida.', true); return false; }
+    if (p.parte_dela != null && p.parte_dela > v) { toast('A parte ' + DA() + ' não pode ser maior que o total.', true); return false; }
+    const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa };
+    const m = mesAtual();
+    if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
+    else {
+      await q(sb.from('despesas_recorrentes').update(payload).eq('id', x.id));
+      // atualiza o lançamento deste mês, se já existir (mantém o "recebido")
+      await q(sb.from('despesas').update({
+        valor: v, descricao: n, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela,
+        data: m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m)))
+      }).eq('recorrente_id', x.id).eq('mes', m));
+    }
+    await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
+    await carregarFixas();
+    await recarregar();
+    toast(novo ? 'Fixa criada · já entrou em ' + mesMin(m) : 'Fixa atualizada');
+  });
+  if (novo) setTimeout(() => valor.focus(), 260);
+}
+
+// ===================== Estrutura =====================
+function mesNav() {
+  const max = addMes(mesAtual(), 1);
+  return h('div', { class: 'mesnav' },
+    h('button', { class: 'navbtn', type: 'button', 'aria-label': 'Mês anterior', text: '‹', onclick: () => mudarMes(-1) }),
+    h('span', { class: 'mesnome', text: nomeMes(S.mes) }),
+    h('button', { class: 'navbtn', type: 'button', 'aria-label': 'Mês seguinte', text: '›', disabled: S.mes >= max, onclick: () => mudarMes(1) }),
+    S.mes !== mesAtual() ? h('button', { class: 'link small', type: 'button', text: 'Este mês', onclick: () => { S.mes = mesAtual(); S.despesas = []; S.ganhos = []; render(); recarregar(); } }) : null);
+}
+async function mudarMes(n) {
+  S.mes = addMes(S.mes, n);
+  S.despesas = []; S.ganhos = [];
+  render();
+  await recarregar();
+}
+function irPara(t) {
+  S.tab = t;
+  window.scrollTo(0, 0);
+  render();
+  if (t === 'fixas') carregarFixas().then(render);
+}
+function render() {
+  if (!S.user) return;
+  const views = { mes: viewMes, despesas: viewDespesas, ganhos: viewGanhos, calcular: viewCalcular, fixas: viewFixas, ajustes: viewAjustes };
+  const acoes = { mes: () => abrirDespesa(), despesas: () => abrirDespesa(), ganhos: () => abrirGanho(), fixas: () => abrirFixa() };
+  const rotulos = { mes: 'Novo gasto', despesas: 'Novo gasto', ganhos: 'Novo ganho', fixas: 'Nova despesa fixa' };
+  const botoes = h('div', { class: 'acts' },
+    S.tab === 'mes' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
+    S.tab === 'ajustes' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara('mes') }) : null,
+    acoes[S.tab] ? h('button', { class: 'addbtn', type: 'button', text: '+', 'aria-label': rotulos[S.tab], onclick: acoes[S.tab] }) : null);
+  const header = h('header', { class: 'top' },
+    h('div', { class: 'toprow' }, h('h1', { text: TITULOS[S.tab] }), botoes),
+    (S.tab === 'mes' || S.tab === 'despesas' || S.tab === 'ganhos') ? mesNav() : null);
+  const main = h('main', null, views[S.tab]());
+  const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Separadores' }, TABS.map(t => h('button', {
+    type: 'button', class: 'tab' + (S.tab === t ? ' on' : ''), 'aria-current': S.tab === t ? 'page' : null, onclick: () => irPara(t)
+  }, icon(ICONS[t]), h('span', { text: TITULOS[t] }))));
+  app.replaceChildren(header, main, tabbar);
+}
+
+function renderLogin() {
+  document.querySelectorAll('.backdrop').forEach(b => b.remove());
+  document.body.classList.remove('noscroll');
+  const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', placeholder: 'Email', 'aria-label': 'Email', required: true });
+  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
+  const btn = h('button', { class: 'btn primary', type: 'submit', text: 'Entrar' });
+  const form = h('form', { class: 'login' },
+    h('div', { class: 'logo', text: 'GPP' }), h('h1', { text: 'GPP Dashboard' }), h('p', { text: 'Os teus gastos e ganhos, num só sítio.' }),
+    email, pass, btn);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    btn.disabled = true; btn.textContent = 'A entrar…';
+    const r = await sb.auth.signInWithPassword({ email: email.value.trim(), password: pass.value });
+    btn.disabled = false; btn.textContent = 'Entrar';
+    if (r.error) { erro(r.error); return; }
+    await entrar(r.data.user);
+  });
+  app.replaceChildren(form);
+}
+
+async function entrar(user) {
+  S.user = user;
+  S.mes = mesAtual();
+  S.tab = 'mes';
+  S.despesas = []; S.ganhos = [];
+  app.replaceChildren(vazio('A carregar…'));
+  try { S.config = await q(sb.rpc('garantir_config')); }
+  catch (e) { erro(e); S.config = {}; }
+  render();
+  await Promise.all([carregarMes(), carregarFixas()]);
+  render();
+}
+
+sb.auth.onAuthStateChange(ev => {
+  if (ev === 'SIGNED_OUT') {
+    S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = [];
+    S.calc = { init: false, eu: '', ela: '', valor: '' };
+    setTimeout(renderLogin, 0);
+  }
+});
+
+// Ao voltar à app (ex.: depois de pagar com Apple Pay), atualiza
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.user && S.mes) recarregar();
+});
+
+(async function init() {
+  try {
+    const r = await sb.auth.getSession();
+    const session = r.data && r.data.session;
+    if (session) await entrar(session.user); else renderLogin();
+  } catch (e) { erro(e); renderLogin(); }
+})();
+})();
