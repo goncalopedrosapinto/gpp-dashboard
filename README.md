@@ -16,6 +16,8 @@ Web app pessoal para iPhone: os meus gastos e ganhos, contas partilhadas com a B
 | `docs/` | O que o GitHub Pages publica (não editar à mão) |
 | `supabase/migrations/` | Esquema da base de dados, aplicado por ordem |
 | `tests/sql/` | Testes da base de dados (Postgres local) |
+| `supabase/functions/calendario/` | Edge Function que publica a agenda em .ics para o iPhone |
+| `tests/ics/` | Testes do gerador .ics (validado com o parser `icalendar`) |
 | `tests/e2e/` | Teste de ponta a ponta num iPhone simulado (Playwright) |
 
 ## Alterar a app
@@ -33,6 +35,7 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 - **Calculadora:** o único sítio com divisão proporcional ao rendimento líquido de cada um. Registar a partir dela preenche a parte da Bia.
 - **Despesas fixas:** geradas uma vez por mês, com a parte da Bia se for partilhada. Se apagar a do mês, não volta. Dia 31 passa para o último dia do mês.
 - **Contas:** o saldo de cada conta é o último ajuste ao valor real mais os movimentos posteriores (ganhos, gastos, o que a Bia devolve, transferências). Um ajuste no dia D já inclui tudo o que tem data anterior; do próprio dia só conta o que for registado depois. Gastos e ganhos sem conta escolhida vão para a principal.
+- **Agenda:** eventos próprios em quatro agendas (pessoal, trabalho, Bia, outro), com hora ou dia inteiro, repetição (semanal, mensal, anual) e alerta. Os pagamentos das despesas fixas aparecem sozinhos. O iPhone subscreve cada agenda em separado (`webcal://…/functions/v1/calendario?t=TOKEN&a=bia`), com a sua cor e os alertas; os pagamentos avisam às 9:00 da véspera.
 - **Apple Pay:** entra via Atalho do iPhone (`rpc/registar_apple_pay`, protegido por token pessoal). Corrigir a categoria/partilha de um comerciante memoriza a regra para os próximos gastos.
 
 ## Regras de interface

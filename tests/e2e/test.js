@@ -43,7 +43,7 @@ function subDe(hdr) {
   try { const p = JSON.parse(Buffer.from(parts[1], 'base64url').toString()); return p.role === 'authenticated' ? p.sub : null; } catch (e) { return null; }
 }
 const ident = k => { if (!/^[a-z_][a-z0-9_]*$/.test(k)) throw new Error('identificador inválido ' + k); return '"' + k + '"'; };
-const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay', 'criar_conta', 'ajustar_saldo', 'definir_principal'];
+const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados'];
 const COMPOSTAS = ['garantir_config'];
 const log = [];
 
@@ -168,6 +168,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   }
   const apagarNaFolha = async () => { await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]'); await page.click('dialog.alert .danger'); await fechado(); };
   const tab = async n => { await page.click(`.tab:has-text("${n}")`); await page.waitForTimeout(250); };
+  const irFixas = async () => { await tab('Gastos'); await page.click('[aria-label="Despesas fixas"]'); await page.waitForSelector('h1:has-text("Fixas")'); await page.waitForTimeout(200); };
   const guardar = async () => { await page.click('.sheet .snav .link.b'); await fechado(); };
   const bd = async (sql, a) => (await pool.query(sql, a || [])).rows;
   const bdUser = async sql => { const c = await pool.connect(); try { await c.query('begin'); await c.query('set local role authenticated'); await c.query("select set_config('request.jwt.claim.sub', $1, true)", [USER.id]); const r = (await c.query(sql)).rows; await c.query('commit'); return r; } finally { c.release(); } };
@@ -235,7 +236,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await shot('03-ganhos');
 
   console.log('Fixas');
-  await tab('Fixas');
+  await irFixas();
   async function novaFixa(v, n, dia, cat, parteDela, metade) {
     await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
     await page.fill('.sheet [aria-label="Valor mensal"]', v);
@@ -400,8 +401,87 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await tab('Resumo');
   check((await pou()) === eur(pouAntes + 400) && (await cgd()) === '2500,00€', 'o seguro sai da Poupança e não mexe na CGD');
 
+
+  console.log('Agenda');
+  await tab('Agenda');
+  await page.waitForSelector('.cal');
+  check(await page.$('.cal-dia.hoje[aria-pressed="true"]') !== null, 'agenda abre no dia de hoje');
+  check(await page.$('.cal-dia:has(.cal-num:text-is("30")) .ag-pag') !== null && await page.$('.cal-dia:has(.cal-num:text-is("28")) .ag-pag') !== null, 'pagamentos das fixas aparecem nos dias 28 e 30');
+  await page.click('.cal-dia:has(.cal-num:text-is("30"))');
+  check(await tem('Pagar Água'), 'tocar no dia 30 mostra "Pagar Água"');
+  await page.click('.cal-dia.hoje');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.click('.sheet .snav .link.b');
+  check(await tem('Dá um título ao evento'), 'evento sem título: erro junto ao Guardar');
+  await page.fill('.sheet [aria-label="Título"]', 'Jantar com a Bia');
+  await page.click('.sheet [aria-label="Agenda"] .chip:has-text("Bia")');
+  await page.click('.sheet .snav .link.b');
+  check(await tem('Indica a hora de início'), 'sem hora nem "Todo o dia": erro');
+  await page.fill('.sheet [aria-label="Início"]', '20:00');
+  await page.fill('.sheet [aria-label="Fim"]', '22:00');
+  await page.click('.sheet [aria-label="Alerta"] .chip:has-text("1 h antes")');
+  await page.fill('.sheet [aria-label="Local"]', 'Aveiro');
+  await shot('14-novo-evento');
+  await auditar('novo evento');
+  await guardar();
+  await toastTem('Evento guardado');
+  check(await tem('20:00–22:00 · Aveiro · Bia'), 'jantar aparece no dia com hora, local e agenda');
+  const mesIso = (await bd("select to_char(date_trunc('month', current_date), 'YYYY-MM') m"))[0].m;
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Reunião de vendas');
+  await page.click('.sheet [aria-label="Agenda"] .chip:has-text("Trabalho")');
+  await page.fill('.sheet [aria-label="Data"]', mesIso + '-03');
+  await page.fill('.sheet [aria-label="Início"]', '09:30');
+  await page.click('.sheet [aria-label="Repetição"] .chip:has-text("Semanal")');
+  await guardar();
+  check(await page.$('.cal-dia:has(.cal-num:text-is("10")) .ag-trabalho') !== null && await page.$('.cal-dia:has(.cal-num:text-is("17")) .ag-trabalho') !== null, 'evento semanal repete-se nos dias 10 e 17');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Teste');
+  await page.fill('.sheet [aria-label="Início"]', '10:00');
+  await page.fill('.sheet [aria-label="Fim"]', '09:00');
+  await page.click('.sheet .snav .link.b');
+  check(await tem('O fim tem de ser depois do início'), 'fim antes do início: erro');
+  await page.keyboard.press('Escape'); await fechado();
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Aniversário da Bia');
+  await page.click('.sheet [aria-label="Agenda"] .chip:has-text("Bia")');
+  await page.check('.sheet [aria-label="Todo o dia"]');
+  check(await page.isHidden('.sheet [aria-label="Início"]'), '"Todo o dia" esconde as horas');
+  await page.click('.sheet [aria-label="Repetição"] .chip:has-text("Anual")');
+  await page.click('.sheet [aria-label="Alerta"] .chip:has-text("1 dia antes")');
+  await guardar();
+  const aniv = (await bd("select dia_inteiro, hora_inicio, repete, alerta_min, agenda from eventos where titulo = 'Aniversário da Bia'"))[0];
+  check(aniv && aniv.dia_inteiro && aniv.hora_inicio === null && aniv.repete === 'anual' && aniv.alerta_min === 1440 && aniv.agenda === 'bia', 'aniversário gravado: dia inteiro, anual, alerta 1 dia antes');
+  await page.click('.cal-dia.hoje');
+  await page.click('.lrow:has-text("Jantar com a Bia")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Título"]', 'Jantar no Mercado');
+  await guardar();
+  check(await tem('Jantar no Mercado'), 'editar o título do evento');
+  await shot('15-agenda');
+  await auditar('agenda');
+  await page.click('.cal-dia:has(.cal-num:text-is("3"))');
+  await page.click('.lrow:has-text("Reunião de vendas")'); await page.waitForSelector('dialog.sheet[open]');
+  await apagarNaFolha();
+  check((await bd("select count(*)::int n from eventos where titulo = 'Reunião de vendas'"))[0].n === 0, 'apagar evento com confirmação');
+
+  console.log('Feed para o iPhone');
+  const tkCal = (await bd('select token_calendario from config'))[0].token_calendario;
+  const rf = await rest('POST', 'rpc/calendario_dados', '', {}, JSON.stringify({ token: tkCal, p_agenda: null }));
+  const { construirICS } = await import(require('url').pathToFileURL(path.join(ROOT, 'supabase', 'functions', 'calendario', 'ics.mjs')).href);
+  const icsTxt = construirICS(rf.body, { agora: Date.now() });
+  fs.writeFileSync(path.join(SHOTS, 'feed.ics'), icsTxt);
+  let lidos = '';
+  try { lidos = execSync('python3 -I -c "import sys,icalendar; c=icalendar.Calendar.from_ical(open(sys.argv[1],\'rb\').read()); print(len(list(c.walk(\'VEVENT\'))))" ' + path.join(SHOTS, 'feed.ics')).toString().trim(); } catch (e) { lidos = 'erro ' + e.message; }
+  check(rf.status === 200 && Number(lidos) === rf.body.eventos.length + rf.body.pagamentos.length && rf.body.eventos.length === 2, 'feed real: ' + lidos + ' eventos lidos pelo parser (2 eventos + ' + (rf.body.pagamentos || []).length + ' pagamentos)');
+  check(icsTxt.includes('SUMMARY:[Bia] Jantar no Mercado') && icsTxt.includes('TRIGGER:-PT60M'), 'feed leva o jantar com alerta 1 h antes');
+  await tab('Resumo');
+  await page.click('[aria-label="Ajustes"]'); await page.waitForSelector('h1:has-text("Ajustes")');
+  const href = await page.getAttribute('a[aria-label="Subscrever Bia no iPhone"]', 'href');
+  check(href === 'webcal://klmjdjhvsxvopctgmhyu.supabase.co/functions/v1/calendario?t=' + tkCal + '&a=bia', 'Ajustes: link webcal da agenda Bia com o token');
+  await page.click('button:has-text("Fechar")');
+
   console.log('Editar e apagar');
-  await tab('Fixas');
+  await irFixas();
   await page.click('.lrow:has-text("Ginásio")'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Valor mensal"]', '40');
   await guardar();

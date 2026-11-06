@@ -216,6 +216,29 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 #toast.show{opacity:1;transform:translate(-50%,0)}
 #toast.bad{background:#b3261e}
 
+
+/* Agenda */
+:root{--ag-pessoal:#0060df;--ag-trabalho:#b45309;--ag-bia:#be185d;--ag-outro:#6b7280;--ag-pag:#137a3f}
+@media (prefers-color-scheme: dark){:root{--ag-pessoal:#4da3ff;--ag-trabalho:#f59e0b;--ag-bia:#f472b6;--ag-outro:#9ca3af;--ag-pag:#32d26a}}
+.ag-pessoal{--c:var(--ag-pessoal)} .ag-trabalho{--c:var(--ag-trabalho)} .ag-bia{--c:var(--ag-bia)} .ag-outro{--c:var(--ag-outro)} .ag-pag{--c:var(--ag-pag)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);flex:none}
+.chip .dot{margin-right:6px;vertical-align:1px}
+.chip[aria-pressed="true"] .dot{box-shadow:0 0 0 2px var(--on-accent)}
+.cal-wrap{padding:8px 8px 10px}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cal-dow{font-size:12px;color:var(--muted);text-align:center;padding:4px 0 6px;text-transform:uppercase}
+.cal-dia{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:46px;padding:6px 0 4px;border:0;border-radius:10px;background:none;color:var(--text);font-size:16px;font-variant-numeric:tabular-nums}
+.cal-dia.hoje .cal-num{color:var(--accent);font-weight:700}
+.cal-dia[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.cal-dia[aria-pressed="true"] .cal-num{color:var(--on-accent)}
+.cal-dia[aria-pressed="true"] .dot{box-shadow:0 0 0 1.5px var(--on-accent)}
+.cal-pontos{display:flex;gap:3px;min-height:6px}
+.cal-pontos .dot{width:6px;height:6px}
+.legenda{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 16px 0;font-size:13px;color:var(--muted)}
+.legenda span{display:inline-flex;align-items:center;gap:6px}
+.barra{width:4px;align-self:stretch;border-radius:2px;background:var(--c);flex:none;margin:2px 0}
+input[type="time"].ginput,input[type="date"].ginput{min-height:34px}
+
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{transition:none !important;animation:none !important}
 }

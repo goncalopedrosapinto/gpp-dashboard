@@ -4,11 +4,11 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.4 · nov 2026';
+const VERSAO = 'v1.5 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
-const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
-const TABS = ['mes', 'despesas', 'ganhos', 'calcular', 'fixas'];
+const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
+const TABS = ['mes', 'despesas', 'ganhos', 'agenda', 'calcular'];
 
 const app = document.getElementById('app');
 if (!window.supabase || !window.supabase.createClient) {
@@ -21,7 +21,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 const S = {
   user: null, config: null, tab: 'mes', mes: null, filtro: 'todas', loading: false, seq: 0,
-  despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [], contas: [],
+  despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [], contas: [], eventos: [], diaSel: null,
   calc: { init: false, eu: '', ela: '', valor: '' }
 };
 
@@ -53,6 +53,7 @@ const ICONS = {
   mes: ['M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
   despesas: ['M12 21V9', 'M7 14l5-5 5 5', 'M5 3h14'],
   ganhos: ['M12 3v12', 'M7 10l5 5 5-5', 'M5 21h14'],
+  agenda: ['M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z', 'M8 2v4', 'M16 2v4', 'M3 10h18', 'M8 14h.01', 'M12 14h.01', 'M16 14h.01', 'M8 18h.01', 'M12 18h.01'],
   calcular: ['M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z', 'M8.5 7.5h7', 'M9 12h.01', 'M12 12h.01', 'M15 12h.01', 'M9 16h.01', 'M12 16h.01', 'M15 16h.01'],
   fixas: ['M17 2l4 4-4 4', 'M3 11V9a3 3 0 0 1 3-3h15', 'M7 22l-4-4 4-4', 'M21 13v2a3 3 0 0 1-3 3H3'],
   ajustes: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6']
@@ -266,7 +267,9 @@ async function carregarMes() {
       q(sb.from('ganhos').select('*').eq('mes', m).order('data', { ascending: false }).order('id', { ascending: false })),
       q(sb.from('despesas').select('*').eq('partilhada', true).eq('recebido', false).order('data', { ascending: false }).order('id', { ascending: false })),
       q(sb.from('proximos_pagamentos').select('*').order('data_vencimento').limit(5)),
-      q(sb.from('saldos_contas').select('*').order('ordem').order('conta_id'))
+      q(sb.from('saldos_contas').select('*').order('ordem').order('conta_id')),
+      q(sb.from('eventos').select('*').eq('repete', 'nunca').gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m)))),
+      q(sb.from('eventos').select('*').neq('repete', 'nunca').lte('data', m.slice(0, 8) + pad2(ultimoDia(m))))
     ]);
     if (seq !== S.seq) return;
     S.despesas = res[0] || [];
@@ -274,6 +277,7 @@ async function carregarMes() {
     S.aReceber = res[2] || [];
     S.proximos = res[3] || [];
     S.contas = res[4] || [];
+    S.eventos = (res[5] || []).concat(res[6] || []);
   } catch (e) { if (seq === S.seq) erro(e); }
   finally { if (seq === S.seq) S.loading = false; }
 }
@@ -370,6 +374,7 @@ function viewMes() {
       h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
         h('div', { class: 'rsub', text: diaCurto(x.data_vencimento) + (x.partilhada ? ' · Partilhada' : '') })),
       h('div', { class: 'rval', text: fmt(x.valor) })))));
+    out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Gerir despesas fixas', onclick: () => irPara('fixas') })));
   } else out.push(vazio('Sem despesas fixas.', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
   return out;
 }
@@ -531,6 +536,8 @@ function viewAjustes() {
       h('li', null, 'Paga algo pequeno e confirma em Gastos › Por rever.')
     )),
     hint('O token é a tua chave pessoal: não o partilhes. Quem o tiver só consegue adicionar gastos, não ler os teus dados.'),
+
+    ...blocoFeeds(),
 
     glabel('Conta'),
     group(kv('Sessão', S.user ? S.user.email : '—')),
@@ -851,6 +858,173 @@ function abrirTransferencia() {
   valor.focus();
 }
 
+// ===================== Agenda =====================
+const AGENDAS = ['pessoal', 'trabalho', 'bia', 'outro'];
+const nomeAg = a => (a === 'bia' ? ELA() : a === 'pag' ? 'Pagamentos' : ({ pessoal: 'Pessoal', trabalho: 'Trabalho', outro: 'Outro' })[a] || a);
+const REPETE = [['Não repete', 'nunca'], ['Semanal', 'semanal'], ['Mensal', 'mensal'], ['Anual', 'anual']];
+const ALERTAS = [['Sem alerta', null], ['Na hora', 0], ['15 min antes', 15], ['1 h antes', 60], ['1 dia antes', 1440]];
+const hhmm = t => (t ? String(t).slice(0, 5) : '');
+const horario = ev => (ev.dia_inteiro || !ev.hora_inicio ? 'Todo o dia' : hhmm(ev.hora_inicio) + (ev.hora_fim ? '–' + hhmm(ev.hora_fim) : ''));
+const FEED = SUPABASE_URL.replace('https://', '') + '/functions/v1/calendario';
+
+// Repetições: as mesmas regras do RRULE do feed (dias que não existem no mês são saltados)
+function ocorreEm(ev, iso) {
+  if (ev.data === iso) return true;
+  if (iso < ev.data || ev.repete === 'nunca') return false;
+  const [y1, m1, d1] = ev.data.split('-').map(Number), [y2, m2, d2] = iso.split('-').map(Number);
+  if (ev.repete === 'semanal') return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000) % 7 === 0;
+  if (ev.repete === 'mensal') return d1 === d2;
+  if (ev.repete === 'anual') return d1 === d2 && m1 === m2;
+  return false;
+}
+function itensDoMes(m) {
+  const res = {}, ud = ultimoDia(m);
+  const add = (iso, it) => { (res[iso] = res[iso] || []).push(it); };
+  for (let d = 1; d <= ud; d++) {
+    const iso = m.slice(0, 8) + pad2(d);
+    S.eventos.forEach(ev => { if (ocorreEm(ev, iso)) add(iso, { tipo: 'evento', agenda: ev.agenda, ev: ev }); });
+  }
+  S.fixas.filter(f => f.ativa).forEach(f => {
+    const iso = m.slice(0, 8) + pad2(Math.min(f.dia_vencimento, ud));
+    if (iso >= f.inicio && (!f.fim || iso <= f.fim)) add(iso, { tipo: 'pagamento', agenda: 'pag', f: f });
+  });
+  return res;
+}
+const chaveOrdem = it => (it.tipo === 'pagamento' ? '0' : it.ev.dia_inteiro || !it.ev.hora_inicio ? '1' : '2' + it.ev.hora_inicio);
+
+function linhaItemAgenda(it) {
+  if (it.tipo === 'pagamento') {
+    const f = it.f;
+    return h('button', { type: 'button', class: 'lrow', onclick: () => abrirFixa(f) },
+      h('span', { class: 'barra ag-pag', 'aria-hidden': 'true' }),
+      h('div', { class: 'rmain' },
+        h('div', { class: 'rtitle', text: 'Pagar ' + f.nome }),
+        h('div', { class: 'rsub', text: ['Pagamento', f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
+      h('div', { class: 'rval', text: fmt(f.valor) }),
+      h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
+  }
+  const ev = it.ev;
+  return h('button', { type: 'button', class: 'lrow', onclick: () => abrirEvento(ev) },
+    h('span', { class: 'barra ag-' + ev.agenda, 'aria-hidden': 'true' }),
+    h('div', { class: 'rmain' },
+      h('div', { class: 'rtitle', text: ev.titulo }),
+      h('div', { class: 'rsub', text: [horario(ev), ev.local, nomeAg(ev.agenda), ev.repete !== 'nunca' ? REPETE.find(r => r[1] === ev.repete)[0] : null].filter(Boolean).join(' · ') })),
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
+}
+
+function viewAgenda() {
+  const m = S.mes, [y, mo] = m.split('-').map(Number), ud = ultimoDia(m);
+  if (!S.diaSel || S.diaSel.slice(0, 7) !== m.slice(0, 7)) S.diaSel = m === mesAtual() ? hojeISO() : m;
+  const porDia = itensDoMes(m);
+  const vazios = (new Date(y, mo - 1, 1).getDay() + 6) % 7; // semana começa à segunda
+  const grid = h('div', { class: 'cal', role: 'group', 'aria-label': 'Dias de ' + mesMin(m) },
+    ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'].map(d => h('div', { class: 'cal-dow', 'aria-hidden': 'true', text: d })),
+    Array.from({ length: vazios }, () => h('div', { 'aria-hidden': 'true' })),
+    Array.from({ length: ud }, (_, i) => {
+      const iso = m.slice(0, 8) + pad2(i + 1), itens = porDia[iso] || [];
+      const cores = itens.map(it => it.agenda).filter((a, k, arr) => arr.indexOf(a) === k).slice(0, 3);
+      return h('button', {
+        type: 'button', class: 'cal-dia' + (iso === hojeISO() ? ' hoje' : ''), 'aria-pressed': String(iso === S.diaSel),
+        'aria-label': diaLongo(iso) + (itens.length ? ', ' + itens.length + (itens.length === 1 ? ' item' : ' itens') : ''),
+        onclick: () => { S.diaSel = iso; render(); const b = document.querySelector('.cal-dia[aria-pressed="true"]'); if (b) b.focus(); }
+      }, h('span', { class: 'cal-num', text: String(i + 1) }),
+        h('span', { class: 'cal-pontos', 'aria-hidden': 'true' }, cores.map(c => h('i', { class: 'dot ag-' + c }))));
+    }));
+  const legenda = h('div', { class: 'legenda', 'aria-hidden': 'true' },
+    AGENDAS.concat(['pag']).map(a => h('span', null, h('i', { class: 'dot ag-' + a }), nomeAg(a))));
+  const itens = (porDia[S.diaSel] || []).slice().sort((a, b) => (chaveOrdem(a) < chaveOrdem(b) ? -1 : 1));
+  const out = [group(h('div', { class: 'cal-wrap' }, grid)), legenda, glabel(diaLongo(S.diaSel))];
+  if (S.loading && !S.eventos.length) out.push(...carregando());
+  else if (!itens.length) out.push(vazio('Nada marcado para este dia.', 'Novo evento', () => abrirEvento(null, S.diaSel)));
+  else out.push(lista(itens.map(linhaItemAgenda)));
+  return out;
+}
+
+// Escolha única em chips (aria-pressed)
+function escolha(opcoes, atual, rotulo, comPonto) {
+  let valor = atual;
+  const box = h('div', { class: 'chips', role: 'group', 'aria-label': rotulo });
+  const btns = opcoes.map(([label, v]) => h('button', {
+    type: 'button', class: 'chip', 'aria-pressed': String(v === valor),
+    onclick: () => { valor = v; btns.forEach((b, i) => b.setAttribute('aria-pressed', String(opcoes[i][1] === valor))); }
+  }, comPonto ? h('i', { class: 'dot ag-' + v, 'aria-hidden': 'true' }) : null, label));
+  box.append(...btns);
+  return { el: box, valor: () => valor };
+}
+
+function abrirEvento(ev, dataPreset) {
+  const novo = !ev;
+  const titulo = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', maxlength: '120', placeholder: 'Ex.: Jantar com a ' + ELA(), 'aria-label': 'Título', 'aria-required': 'true', value: ev ? ev.titulo : '', style: 'text-align:left' });
+  const data = h('input', { class: 'ginput', type: 'date', value: ev ? ev.data : (dataPreset || hojeISO()), 'aria-label': 'Data', 'aria-required': 'true' });
+  const swDia = interruptor(ev ? ev.dia_inteiro : false, 'Todo o dia');
+  const ini = h('input', { class: 'ginput', type: 'time', value: ev ? hhmm(ev.hora_inicio) : '', 'aria-label': 'Início' });
+  const fim = h('input', { class: 'ginput', type: 'time', value: ev ? hhmm(ev.hora_fim) : '', 'aria-label': 'Fim' });
+  const rIni = grow('Início', ini), rFim = grow('Fim', fim);
+  const drawDia = () => { rIni.hidden = rFim.hidden = swDia.checked; };
+  swDia.addEventListener('change', drawDia); drawDia();
+  const agenda = escolha(AGENDAS.map(a => [nomeAg(a), a]), ev ? ev.agenda : 'pessoal', 'Agenda', true);
+  const repete = escolha(REPETE, ev ? ev.repete : 'nunca', 'Repetição');
+  const alerta = escolha(ALERTAS, ev ? ev.alerta_min : 15, 'Alerta');
+  const local = h('input', { class: 'ginput', type: 'text', maxlength: '200', placeholder: 'Opcional', 'aria-label': 'Local', value: ev ? (ev.local || '') : '' });
+  const notas = h('input', { class: 'ginput', type: 'text', maxlength: '2000', placeholder: 'Opcional', 'aria-label': 'Notas', value: ev ? (ev.notas || '') : '' });
+  let s;
+  s = sheet(novo ? 'Novo evento' : 'Editar evento', [
+    group(h('div', { class: 'pad' }, titulo)),
+    glabel('Agenda', 'h3'), group(h('div', { class: 'pad' }, agenda.el)),
+    group(grow('Data', data), grow('Todo o dia', swDia), rIni, rFim),
+    glabel('Repetição', 'h3'), group(h('div', { class: 'pad' }, repete.el)),
+    glabel('Alerta no iPhone', 'h3'), group(h('div', { class: 'pad' }, alerta.el)),
+    group(grow('Local', local), grow('Notas', notas)),
+    novo ? null : botaoApagar('Apagar evento', 'Apagar «' + ev.titulo + '»?', ev.repete !== 'nunca' ? 'Apaga todas as repetições. Não dá para desfazer.' : 'Não dá para desfazer.', async () => {
+      await q(sb.from('eventos').delete().eq('id', ev.id));
+      s.fechar(); await recarregar(); toast('Evento apagado');
+    }, () => s)
+  ], async () => {
+    const t = titulo.value.trim();
+    if (!t) return s.erro('Dá um título ao evento.', titulo);
+    if (!data.value) return s.erro('Indica a data.', data);
+    const dia = swDia.checked;
+    if (!dia && !ini.value) return s.erro('Indica a hora de início ou marca «Todo o dia».', ini);
+    if (!dia && fim.value && fim.value <= ini.value) return s.erro('O fim tem de ser depois do início.', fim);
+    const payload = {
+      titulo: t, agenda: agenda.valor(), data: data.value, dia_inteiro: dia,
+      hora_inicio: dia ? null : ini.value, hora_fim: dia ? null : (fim.value || null),
+      repete: repete.valor(), alerta_min: alerta.valor(),
+      local: local.value.trim() || null, notas: notas.value.trim() || null
+    };
+    if (novo) await q(sb.from('eventos').insert(payload));
+    else await q(sb.from('eventos').update(payload).eq('id', ev.id));
+    S.diaSel = payload.data;
+    const mesE = payload.data.slice(0, 8) + '01';
+    if (mesE !== S.mes) S.mes = mesE;
+    await recarregar();
+    toast('Evento guardado');
+  });
+  if (novo) titulo.focus();
+}
+
+function blocoFeeds() {
+  const tk = (S.config && S.config.token_calendario) || '';
+  const url = a => FEED + '?t=' + tk + (a ? '&a=' + a : '');
+  const linhas = AGENDAS.concat(['pagamentos']).map(a => {
+    const nome = nomeAg(a === 'pagamentos' ? 'pag' : a);
+    return grow(h('span', { class: 'glab' }, h('i', { class: 'dot ag-' + (a === 'pagamentos' ? 'pag' : a), 'aria-hidden': 'true' }), ' ' + nome),
+      h('div', { class: 'inline' },
+        h('button', { type: 'button', class: 'link small2', text: 'Copiar', 'aria-label': 'Copiar link ' + nome, onclick: () => copiar('https://' + url(a)) }),
+        h('a', { class: 'link b', href: 'webcal://' + url(a), text: 'Subscrever', 'aria-label': 'Subscrever ' + nome + ' no iPhone' })));
+  });
+  return [
+    glabel('Agenda no iPhone'),
+    group(linhas),
+    hint('Toca em Subscrever em cada agenda que queres ver no Calendário do iPhone e confirma: cada uma fica com a sua cor. Depois, em Definições › Calendário › Contas › Calendários subscritos, abre cada uma e desliga «Remover alertas». O iPhone atualiza estes calendários sozinho (até 1 hora de atraso).'),
+    botaoApagar('Gerar links novos', 'Gerar links novos?', 'Os links atuais deixam de funcionar. Tens de voltar a subscrever no iPhone.', async () => {
+      const novo = await q(sb.rpc('renovar_token_calendario'));
+      S.config.token_calendario = novo;
+      render(); toast('Links renovados · volta a subscrever no iPhone');
+    }, () => ({ erro: m => toast(m, true) }))
+  ];
+}
+
 // ===================== Estrutura =====================
 function mesNav() {
   const max = addMes(mesAtual(), 1);
@@ -874,16 +1048,18 @@ function irPara(t) {
 }
 function render() {
   if (!S.user) return;
-  const views = { mes: viewMes, despesas: viewDespesas, ganhos: viewGanhos, calcular: viewCalcular, fixas: viewFixas, ajustes: viewAjustes };
-  const acoes = { mes: () => abrirDespesa(), despesas: () => abrirDespesa(), ganhos: () => abrirGanho(), fixas: () => abrirFixa() };
-  const rotulos = { mes: 'Novo gasto', despesas: 'Novo gasto', ganhos: 'Novo ganho', fixas: 'Nova despesa fixa' };
+  const views = { mes: viewMes, despesas: viewDespesas, ganhos: viewGanhos, agenda: viewAgenda, calcular: viewCalcular, fixas: viewFixas, ajustes: viewAjustes };
+  const acoes = { mes: () => abrirDespesa(), despesas: () => abrirDespesa(), ganhos: () => abrirGanho(), agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
+  const rotulos = { mes: 'Novo gasto', despesas: 'Novo gasto', ganhos: 'Novo ganho', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
   const botoes = h('div', { class: 'acts' },
     S.tab === 'mes' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
+    S.tab === 'despesas' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Despesas fixas', onclick: () => irPara('fixas') }, icon(ICONS.fixas)) : null,
     S.tab === 'ajustes' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara('mes') }) : null,
+    S.tab === 'fixas' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara('despesas') }) : null,
     acoes[S.tab] ? h('button', { class: 'addbtn', type: 'button', text: '+', 'aria-label': rotulos[S.tab], onclick: acoes[S.tab] }) : null);
   const header = h('header', { class: 'top' },
     h('div', { class: 'toprow' }, h('h1', { text: TITULOS[S.tab] }), botoes),
-    (S.tab === 'mes' || S.tab === 'despesas' || S.tab === 'ganhos') ? mesNav() : null);
+    (S.tab === 'mes' || S.tab === 'despesas' || S.tab === 'ganhos' || S.tab === 'agenda') ? mesNav() : null);
   const main = h('main', { 'aria-busy': S.loading ? 'true' : 'false' }, views[S.tab]());
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Separadores' }, TABS.map(t => h('button', {
     type: 'button', class: 'tab' + (S.tab === t ? ' on' : ''), 'aria-current': S.tab === t ? 'page' : null, onclick: () => irPara(t)
@@ -936,7 +1112,7 @@ async function entrar(user) {
 
 sb.auth.onAuthStateChange(ev => {
   if (ev === 'SIGNED_OUT') {
-    S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = []; S.contas = [];
+    S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = []; S.contas = []; S.eventos = []; S.diaSel = null;
     S.calc = { init: false, eu: '', ela: '', valor: '' };
     setTimeout(renderLogin, 0);
   }

@@ -183,4 +183,53 @@ do $$ begin
 end $$;
 reset role;
 
+
+-- ===== v1.5: agenda =====
+set role authenticated;
+set request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+\echo '--- T11: eventos e regras ---'
+select (garantir_config()).token_calendario as tkcal \gset
+insert into eventos (titulo, agenda, data, hora_inicio, hora_fim, alerta_min, local) values ('Jantar com a Bia', 'bia', hoje_lisboa(), '20:00', '22:00', 30, 'Aveiro');
+insert into eventos (titulo, agenda, data, dia_inteiro, repete, alerta_min) values ('Aniversário da Bia', 'bia', '2026-03-14', true, 'anual', 1440);
+insert into eventos (titulo, agenda, data, hora_inicio, repete, alerta_min) values ('Reunião de vendas', 'trabalho', hoje_lisboa() + 1, '09:30', 'semanal', 15);
+insert into eventos (titulo, agenda, data, dia_inteiro) values ('Antigo', 'pessoal', hoje_lisboa() - 200, true);
+insert into eventos (titulo, data, dia_inteiro, hora_inicio, hora_fim) values ('Dia inteiro com horas', hoje_lisboa(), true, '10:00', '11:00');
+insert into despesas_recorrentes (nome, valor, dia_vencimento, partilhada, parte_dela, inicio) values ('Renda', 600, 1, true, 300, '2026-01-01');
+do $$ begin
+  begin insert into eventos (titulo, data) values ('Sem hora', hoje_lisboa()); raise exception 'T11 falhou: evento sem hora nem dia inteiro';
+  exception when check_violation then null; end;
+  begin insert into eventos (titulo, data, hora_inicio, hora_fim) values ('Ao contrário', hoje_lisboa(), '10:00', '09:00'); raise exception 'T11 falhou: fim antes do início';
+  exception when check_violation then null; end;
+  begin insert into eventos (titulo, agenda, data, dia_inteiro) values ('X', 'ginasio', hoje_lisboa(), true); raise exception 'T11 falhou: agenda inválida';
+  exception when check_violation then null; end;
+  if (select hora_inicio from eventos where titulo = 'Dia inteiro com horas') is not null then raise exception 'T11 falhou: dia inteiro devia limpar horas'; end if;
+  begin perform calendario_dados('x'); raise exception 'T11 falhou: autenticado chama calendario_dados';
+  exception when insufficient_privilege then null; end;
+  raise notice 'regras dos eventos: OK';
+end $$;
+
+reset role; set role anon; reset request.jwt.claim.sub;
+\echo '--- T12: dados do feed por token ---'
+select set_config('t.tkcal', :'tkcal', false) \gset
+do $$ declare j jsonb; tk text := current_setting('t.tkcal'); begin
+  j := calendario_dados(tk);
+  if jsonb_array_length(j->'eventos') <> 4 then raise exception 'T12 falhou: eventos %', jsonb_array_length(j->'eventos'); end if;  -- Antigo fica de fora
+  if jsonb_array_length(j->'pagamentos') <> 12 then raise exception 'T12 falhou: pagamentos %', jsonb_array_length(j->'pagamentos'); end if;
+  if (j->'eventos'->0) ? 'owner' then raise exception 'T12 falhou: expõe owner'; end if;
+  j := calendario_dados(tk, 'bia');
+  if jsonb_array_length(j->'eventos') <> 2 or jsonb_array_length(j->'pagamentos') <> 0 then raise exception 'T12 falhou: filtro bia'; end if;
+  j := calendario_dados(tk, 'pagamentos');
+  if jsonb_array_length(j->'eventos') <> 0 or jsonb_array_length(j->'pagamentos') <> 12 then raise exception 'T12 falhou: filtro pagamentos'; end if;
+  begin perform calendario_dados(repeat('0', 64)); raise exception 'T12 falhou: token falso';
+  exception when sqlstate '28000' then null; end;
+  begin perform calendario_dados(tk, 'tudo'); raise exception 'T12 falhou: agenda invalida';
+  exception when raise_exception then if sqlerrm not like 'agenda inválida%' then raise; end if; end;
+  begin perform 1 from eventos; raise exception 'T12 falhou: anon le eventos';
+  exception when insufficient_privilege then null; end;
+  raise notice 'feed por token: OK';
+end $$;
+reset role; set role authenticated; set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin if (select count(*) from eventos) <> 0 then raise exception 'T12 falhou: B ve eventos'; end if; end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'
