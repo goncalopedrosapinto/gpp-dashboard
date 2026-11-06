@@ -255,4 +255,40 @@ do $$ declare j jsonb; s jsonb; r jsonb; begin
 end $$;
 reset role;
 
+
+-- ===== v1.7: crédito e transferências fixas =====
+set role authenticated;
+set request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+\echo '--- T14: cartao de credito e transferencias fixas ---'
+select criar_conta('Caetano GO', 'credito', -450, false) as card \gset
+select set_config('t.card', :'card', false) \gset
+do $$ declare card bigint := current_setting('t.card')::bigint; poup bigint := current_setting('t.poup')::bigint; n int; begin
+  if (select saldo_atual from saldos_contas where conta_id = card) <> -450 then raise exception 'T14 falhou: divida inicial'; end if;
+  begin perform criar_conta('X', 'cripto', 0, false); raise exception 'T14 falhou: tipo invalido aceite';
+  exception when check_violation then null; end;
+  insert into despesas_recorrentes (nome, valor, dia_vencimento, conta_id, inicio) values ('Netflix', 13, 10, card, date_trunc('month', hoje_lisboa())::date);
+  insert into despesas_recorrentes (nome, valor, dia_vencimento, conta_id, para_conta_id, debito_direto, inicio)
+    values ('Pagamento Caetano GO', 127, 8, poup, card, true, date_trunc('month', hoje_lisboa())::date);
+  begin insert into despesas_recorrentes (nome, valor, dia_vencimento, conta_id, para_conta_id) values ('Igual', 1, 1, card, card);
+    raise exception 'T14 falhou: transferencia para a mesma conta';
+  exception when check_violation then null; end;
+  n := gerar_recorrentes();
+  if n <> 2 then raise exception 'T14 falhou: gerou % (esperava 2)', n; end if;
+  if gerar_recorrentes() <> 0 then raise exception 'T14 falhou: duplicou'; end if;
+  if (select conta_id from despesas where descricao = 'Netflix') <> card then raise exception 'T14 falhou: netflix fora do cartao'; end if;
+  if not exists (select 1 from transferencias where nota = 'Pagamento Caetano GO' and de_conta = poup and para_conta = card and valor = 127 and recorrente_id is not null) then
+    raise exception 'T14 falhou: transferencia fixa nao gerada'; end if;
+  if exists (select 1 from despesas where descricao = 'Pagamento Caetano GO') then raise exception 'T14 falhou: pagamento do cartao contado como gasto'; end if;
+  if not exists (select 1 from proximos_pagamentos where nome = 'Pagamento Caetano GO' and para_conta_id = card) then raise exception 'T14 falhou: proximos sem destino'; end if;
+  raise notice 'credito e transferencias fixas: OK';
+end $$;
+reset role; set role anon; reset request.jwt.claim.sub;
+do $$ declare j jsonb; t jsonb; begin
+  j := calendario_dados(current_setting('t.tkcal'), 'pagamentos');
+  select x into t from jsonb_array_elements(j->'pagamentos') x where x->>'nome' = 'Pagamento Caetano GO' limit 1;
+  if not (t->>'transferencia')::boolean or t->>'para' <> 'Caetano GO' or t->>'conta' <> 'Poupança' then raise exception 'T14 falhou: feed %', t; end if;
+  raise notice 'feed com transferencias: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

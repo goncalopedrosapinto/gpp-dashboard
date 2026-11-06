@@ -402,6 +402,81 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check((await pou()) === eur(pouAntes + 400) && (await cgd()) === '2500,00€', 'o seguro sai da Poupança e não mexe na CGD');
 
 
+  console.log('Cartão de crédito e transferências fixas');
+  await page.click('button:has-text("Nova conta")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.click('.sheet .chip:has-text("Cartão de crédito")');
+  await page.waitForSelector('.sheet [aria-label="Dívida hoje"]');
+  check(await tem('quanto deves hoje neste cartão'), 'cartão de crédito pergunta quanto deves');
+  await page.fill('.sheet [aria-label="Dívida hoje"]', '300');
+  await page.fill('.sheet [aria-label="Nome da conta"]', 'Caetano GO');
+  await guardar();
+  await toastTem('Conta criada');
+  const cartao = async () => (await bdUser("select tipo, saldo_atual::float8 s, saldo_previsto::float8 p from saldos_contas where nome = 'Caetano GO'"))[0];
+  let cg = await cartao();
+  check(cg && cg.tipo === 'credito' && cg.s === -300, 'cartão gravado como crédito com saldo −300 € (dívida)');
+  const disp = async () => (await bdUser("select sum(saldo_atual)::float8 t from saldos_contas where tipo <> 'credito'"))[0].t;
+  let txt = await semEsp();
+  check(txt.includes('Dívidanoscartões300,00€') && txt.includes('Patrimóniolíquido' + eur((await disp()) - 300)), 'Resumo separa disponível, dívida (300 €) e património líquido');
+  const cgRow = '.lrow:has(.rtitle:text-is("Caetano GO"))';
+  check((await page.textContent(cgRow + ' .rval')).replace(/[\s  ]/g, '') === '300,00€' && (await page.textContent(cgRow + ' .rsub')).includes('em dívida'), 'linha do cartão mostra 300,00 € em dívida');
+  await shot('17-cartao-credito');
+  await auditar('cartão de crédito');
+  await page.click('[aria-label="Ajustar: Caetano GO"]'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.inputValue('.sheet [aria-label="Dívida real hoje"]')) === '300,00', 'ajustar o cartão mostra a dívida em positivo');
+  await page.fill('.sheet [aria-label="Dívida real hoje"]', '250');
+  await guardar();
+  await toastTem('Saldo ajustado');
+  check((await cartao()).s === -250, 'ajuste do cartão grava −250 €');
+
+  await irFixas();
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  check(await page.isHidden('.sheet [aria-label="De"]'), 'fixa nova começa como despesa (sem De/Para)');
+  await page.fill('.sheet [aria-label="Valor mensal"]', '127');
+  await page.click('.sheet .chip:has-text("Transferência")');
+  check(await page.isVisible('.sheet [aria-label="De"]') && await page.isHidden('.sheet [aria-label="Partilhada"]') && await page.isHidden('.sheet [aria-label="Conta"]'), 'transferência mostra De/Para e esconde categoria, partilha e conta');
+  await page.fill('.sheet [aria-label="Nome"]', 'Pagamento Caetano GO');
+  await page.fill('.sheet [aria-label="Dia do pagamento"]', '8');
+  await page.selectOption('.sheet [aria-label="De"]', { label: 'Poupança' });
+  await page.selectOption('.sheet [aria-label="Para"]', { label: 'Poupança' });
+  await page.click('.sheet .snav .link.b');
+  check(await tem('Escolhe duas contas diferentes'), 'transferência para a mesma conta: erro');
+  await page.selectOption('.sheet [aria-label="Para"]', { label: 'Caetano GO' });
+  await shot('18-fixa-transferencia');
+  await auditar('fixa transferência');
+  await guardar();
+  await toastTem('Fixa criada');
+  const ft = (await bd("select r.id, c.nome de, d.nome para, r.categoria from despesas_recorrentes r join contas c on c.id = r.conta_id join contas d on d.id = r.para_conta_id where r.nome = 'Pagamento Caetano GO'"))[0];
+  check(ft && ft.de === 'Poupança' && ft.para === 'Caetano GO' && ft.categoria === null, 'fixa gravada como transferência Poupança → Caetano GO');
+  const tfx = await bd('select valor, data from transferencias where recorrente_id = $1', [ft.id]);
+  check(tfx.length === 1 && tfx[0].valor === 127 && tfx[0].data === '2026-11-08' && (await bd("select count(*)::int n from despesas where descricao = 'Pagamento Caetano GO'"))[0].n === 0,
+    'gerou a transferência de 8 de novembro e nenhum gasto');
+  txt = await semEsp();
+  check(txt.includes('Gastosfixos675,00€') && txt.includes('Transferênciasentrecontas127,00€'), 'a transferência não entra no total de gastos fixos');
+  check(txt.toLowerCase().includes('poupança·127,00€') && (await texto()).includes('Transferência para Caetano GO'), 'fixas agrupadas pela conta de onde sai o dinheiro');
+  await shot('19-fixas-por-conta');
+  await auditar('fixas por conta');
+  await page.click('.lrow:has-text("Pagamento Caetano GO")'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.getAttribute('.sheet .chip:has-text("Transferência")', 'aria-pressed')) === 'true', 'editar abre como transferência');
+  await page.fill('.sheet [aria-label="Valor mensal"]', '130');
+  await guardar();
+  check((await bd('select valor from transferencias where recorrente_id = $1', [ft.id]))[0].valor === 130, 'mudar a transferência fixa atualiza a deste mês');
+  cg = await cartao();
+  check(cg.p === cg.s + 130, 'saldo previsto do cartão já conta com o pagamento de 130 €');
+  await tab('Agenda');
+  await page.click('.cal-dia:has(.cal-num:text-is("8"))');
+  check(await tem('Transferir: Pagamento Caetano GO') && await tem('De Poupança para Caetano GO'), 'agenda mostra "Transferir" com De → Para no dia 8');
+  await page.click('.cal-dia.hoje');   // volta a hoje para a secção da agenda
+  await tab('Gastos');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor"]', '36');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Barbeiro');
+  await page.selectOption('.sheet [aria-label="Conta"]', { label: 'Caetano GO' });
+  await guardar();
+  await tab('Resumo');
+  check((await cartao()).s === -286 && (await semEsp()).includes('Dívidanoscartões286,00€'), 'gasto pago com o cartão aumenta a dívida para 286 €');
+  check(!(await texto()).includes('Saldo atual da Caetano GO'), 'cartões de crédito não geram aviso de saldo');
+
+
   console.log('Agenda');
   await tab('Agenda');
   await page.waitForSelector('.cal');

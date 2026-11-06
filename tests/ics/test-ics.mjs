@@ -16,7 +16,8 @@ const dados = {
   ],
   pagamentos: [
     { id: 9, nome: 'Renda', valor: 600, partilhada: true, parte_dela: 300, data: '2026-12-01' },
-    { id: 10, nome: 'Água', valor: 40, partilhada: false, parte_dela: null, data: '2026-11-30', debito_direto: true, conta: 'CGD à ordem' }
+    { id: 10, nome: 'Água', valor: 40, partilhada: false, parte_dela: null, data: '2026-11-30', debito_direto: true, conta: 'CGD à ordem' },
+    { id: 11, nome: 'Pagamento Caetano GO', valor: 127, partilhada: false, parte_dela: null, data: '2026-11-08', debito_direto: true, conta: 'MOEY', para: 'Caetano GO', transferencia: true }
   ]
 };
 
@@ -38,6 +39,8 @@ check(tudo.includes('SUMMARY:[Pagamentos] Pagar Renda · 600\\,00 €') && tudo.
 check(tudo.includes('DESCRIPTION:Parte da Bia: 300\\,00 €'), 'pagamento partilhado mostra a parte da Bia');
 check(tudo.includes('SUMMARY:[Pagamentos] Débito direto: Água · 40\\,00 €') && tudo.includes('Amanhã sai o débito de Água (40\\,00 €) da CGD à ordem'), 'débito direto: título e aviso dizem de que conta sai');
 
+check(tudo.includes('Amanhã saem 127\\,00 € da MOEY para Caetano GO') && tudo.includes('De MOEY para Caetano GO.'), 'transferência fixa: aviso diz de onde e para onde');
+
 // Validação independente (parser Python)
 const dir = mkdtempSync(join(tmpdir(), 'ics-'));
 writeFileSync(join(dir, 'tudo.ics'), tudo);
@@ -53,7 +56,7 @@ for f in sys.argv[1:]:
 try {
   const out = execFileSync('python3', ['-I', '-c', py, join(dir, 'tudo.ics'), join(dir, 'bia.ics')]).toString().trim().split('\n');
   console.log('    ' + out.join('\n    '));
-  check(out[0].startsWith('tudo.ics 6 1') && out[1].startsWith('bia.ics 2 1'), 'parser icalendar lê os dois feeds (6 e 2 eventos, fuso incluído)');
+  check(out[0].startsWith('tudo.ics 7 1') && out[1].startsWith('bia.ics 2 1'), 'parser icalendar lê os dois feeds (7 e 2 eventos, fuso incluído)');
   check(out[0].includes('2026-11-06 20:00:00+00:00') || out[0].includes('2026-11-06 20:00:00+00'), 'hora interpretada no fuso de Lisboa (inverno = UTC+0)');
 } catch (e) { check(false, 'parser icalendar: ' + e.message); }
 

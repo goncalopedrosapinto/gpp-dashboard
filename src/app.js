@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.6 · nov 2026';
+const VERSAO = 'v1.7 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -374,7 +374,7 @@ function viewMes() {
     const avisos = avisosSaldo(S.proximos);
     out.push(lista(S.proximos.map((x, i) => h('div', { class: 'lrow' },
       h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
-        h('div', { class: 'rsub' + (avisos[i] ? ' warn' : ''), text: [diaCurto(x.data_vencimento), x.debito_direto ? 'Débito direto' : null,
+        h('div', { class: 'rsub' + (avisos[i] ? ' warn' : ''), text: [diaCurto(x.data_vencimento), x.para_conta_id != null ? 'Para ' + nomeConta(x.para_conta_id) : null, x.debito_direto ? 'Débito direto' : null,
           x.partilhada ? 'Partilhada' : null, avisos[i]].filter(Boolean).join(' · ') })),
       h('div', { class: 'rval', text: fmt(x.valor) })))));
     out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Gerir despesas fixas', onclick: () => irPara('fixas') })));
@@ -479,26 +479,41 @@ function viewCalcular() {
   ];
 }
 
-function viewFixas() {
-  const ativas = S.fixas.filter(x => x.ativa);
-  const total = soma(ativas, x => x.valor);
-  const partesDela = soma(ativas, parte);
-  const out = [glabel('Por mês'), group(
-    kv('Total das fixas ativas', fmt(total), 'strong'),
-    partesDela > 0 ? kv('Parte ' + DA(), '− ' + fmt(partesDela), 'pos') : null,
-    partesDela > 0 ? kv('O teu custo fixo', fmt(r2(total - partesDela))) : null
-  )];
-  out.push(glabel('Despesas fixas'));
-  if (!S.fixas.length) { out.push(vazio('Ainda não tens despesas fixas: crédito, água, ginásio…', 'Adicionar despesa fixa', () => abrirFixa())); return out; }
-  out.push(lista(S.fixas.map(x => h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
+function linhaFixa(x) {
+  const transf = x.para_conta_id != null;
+  return h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.nome }),
-      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, x.debito_direto ? 'Débito direto' : null, S.contas.length > 1 ? nomeConta(x.conta_id) : null,
+      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, transf ? 'Transferência para ' + (nomeConta(x.para_conta_id) || '—') : null,
+        x.debito_direto ? 'Débito direto' : null,
         x.partilhada ? (x.parte_dela != null ? ELA() + ' paga ' + fmt(x.parte_dela) : 'Partilhada') : null,
         x.ativa ? null : 'Pausada'].filter(Boolean).join(' · ') })),
     h('div', { class: 'rval', text: fmt(x.valor) }),
-    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))));
-  out.push(hint('Cada fixa entra sozinha em Gastos todos os meses. Se apagares a deste mês, não volta a aparecer.'));
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
+}
+function viewFixas() {
+  const ativas = S.fixas.filter(x => x.ativa);
+  const gastosF = ativas.filter(x => x.para_conta_id == null), transfF = ativas.filter(x => x.para_conta_id != null);
+  const total = soma(gastosF, x => x.valor);
+  const partesDela = soma(gastosF, parte);
+  const out = [glabel('Por mês'), group(
+    kv('Gastos fixos', fmt(total), 'strong'),
+    partesDela > 0 ? kv('Parte ' + DA(), '− ' + fmt(partesDela), 'pos') : null,
+    partesDela > 0 ? kv('O teu custo fixo', fmt(r2(total - partesDela))) : null,
+    transfF.length ? kv('Transferências entre contas', fmt(soma(transfF, x => x.valor))) : null
+  ), transfF.length ? hint('As transferências (ex.: pagar o cartão de crédito) não contam como gasto: o gasto é o que foi comprado com o cartão.') : null];
+  if (!S.fixas.length) { out.push(glabel('Despesas fixas'), vazio('Ainda não tens despesas fixas: crédito, água, ginásio…', 'Adicionar despesa fixa', () => abrirFixa())); return out; }
+  if (!S.contas.length) {
+    out.push(glabel('Despesas fixas'), lista(S.fixas.map(linhaFixa)));
+  } else {
+    // Agrupadas pela conta de onde sai o dinheiro, como no extrato
+    const grupos = S.contas.map(c => ({ c: c, itens: S.fixas.filter(x => (contaDe(x.conta_id) || {}).conta_id === c.conta_id) })).filter(g => g.itens.length);
+    grupos.forEach(g => {
+      const t = soma(g.itens.filter(x => x.ativa), x => x.valor);
+      out.push(glabel(g.c.nome + ' · ' + fmt(t)), lista(g.itens.map(linhaFixa)));
+    });
+  }
+  out.push(hint('Cada fixa entra sozinha todos os meses. Se apagares o lançamento deste mês, não volta a aparecer.'));
   return out;
 }
 
@@ -686,6 +701,7 @@ function abrirGanho(x) {
 function abrirFixa(x) {
   const novo = !x;
   const st = { categoria: x ? x.categoria : null, partilhada: x ? !!x.partilhada : false, parte_dela: x ? x.parte_dela : null, ativa: x ? !!x.ativa : true };
+  const podeTransf = S.contas.length >= 2;
   const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
   const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
   const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', 'aria-required': 'true', value: x ? String(x.dia_vencimento) : '' });
@@ -694,42 +710,77 @@ function abrirFixa(x) {
   const drawDeb = () => { const t = swDeb.checked ? 'Dia do débito' : 'Dia do pagamento'; rDia.firstChild.textContent = t; dia.setAttribute('aria-label', t); };
   swDeb.addEventListener('change', drawDeb); drawDeb();
   const contaSel = seletorConta(x ? x.conta_id : null);
+  // Transferência: de / para
+  const p = contaPrincipal();
+  const de = podeTransf ? selectConta(x && x.conta_id != null ? x.conta_id : (p ? p.conta_id : null), 'De') : null;
+  const outra = S.contas.find(c => !p || c.conta_id !== p.conta_id);
+  const para = podeTransf ? selectConta(x && x.para_conta_id != null ? x.para_conta_id : (outra ? outra.conta_id : null), 'Para') : null;
+  const grpTransf = podeTransf ? group(grow('De', de), grow('Para', para)) : null;
   const part = blocoPartilha(st, valor, false);
+  const grpCat = [glabel('Categoria', 'h3'), group(h('div', { class: 'pad' }, chips(CATEGORIAS, st)))];
+  const wrapCat = h('div', null, grpCat);
+  const wrapPart = h('div', null, part.group);
+  let tipo = x && x.para_conta_id != null ? 'transferencia' : 'despesa';
+  const drawTipo = t => {
+    tipo = t;
+    const tr = t === 'transferencia';
+    if (grpTransf) grpTransf.hidden = !tr;
+    if (contaSel) contaSel.row.hidden = tr;
+    wrapCat.hidden = tr; wrapPart.hidden = tr; part.info.hidden = tr || part.info.hidden;
+    nome.placeholder = tr ? 'Ex.: Pagamento Caetano GO' : 'Ex.: Ginásio';
+  };
+  const escTipo = podeTransf ? escolha([['Despesa', 'despesa'], ['Transferência', 'transferencia']], tipo, 'Tipo de fixa', false, drawTipo) : null;
   const swAtiva = interruptor(st.ativa, 'Ativa');
   swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
   let s;
   const conteudo = [
     valor, part.info, h('div', { class: 'split', text: 'por mês' }),
+    escTipo ? group(h('div', { class: 'pad' }, escTipo.el)) : null,
     group(grow('Nome', nome), grow('Débito direto', swDeb), rDia, contaSel ? contaSel.row : null),
+    grpTransf,
     h('p', { class: 'hint', style: 'margin:-10px 16px 18px', text: 'Com débito direto o banco cobra sozinho nesse dia: a agenda avisa-te na véspera para confirmares o saldo.' }),
-    glabel('Categoria', 'h3'),
-    group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
-    part.group,
+    wrapCat,
+    wrapPart,
     novo ? null : group(grow('Ativa', swAtiva)),
-    h('p', { class: 'hint', style: 'margin-top:-10px', text: 'Entra sozinha em Gastos todos os meses. Se for partilhada, a parte ' + DA() + ' fica a receber até marcares que recebeste.' }),
     novo ? null : botaoApagar('Apagar despesa fixa', 'Apagar «' + x.nome + '»?', 'Deixa de entrar nos próximos meses. Os meses já lançados mantêm-se.', async () => {
       await q(sb.from('despesas_recorrentes').delete().eq('id', x.id));
       s.fechar(); await carregarFixas(); await recarregar(); toast('Fixa apagada');
     }, () => s)
   ];
-  s = sheet(novo ? 'Nova despesa fixa' : 'Editar despesa fixa', conteudo, async () => {
+  drawTipo(tipo);
+  s = sheet(novo ? 'Nova fixa' : 'Editar fixa', conteudo, async () => {
     const v = validarValor(s, valor); if (v === null) return false;
     const n = nome.value.trim();
     if (!n) return s.erro('Dá um nome à despesa.', nome);
     const d = parseInt(dia.value, 10);
     if (!(d >= 1 && d <= 31)) return s.erro('O dia tem de ser entre 1 e 31.', dia);
-    const p = validarPartilha(s, part, v); if (!p) return false;
-    const payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela, ativa: st.ativa, debito_direto: swDeb.checked };
-    if (contaSel) payload.conta_id = contaSel.ler();
     const m = mesAtual();
+    const dataMes = m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m)));
+    let payload;
+    if (tipo === 'transferencia') {
+      if (de.value === para.value) return s.erro('Escolhe duas contas diferentes.', para);
+      const deId = Number(de.value);
+      payload = { nome: n, valor: v, dia_vencimento: d, categoria: null, partilhada: false, parte_dela: null, ativa: st.ativa,
+        debito_direto: swDeb.checked, conta_id: p && deId === p.conta_id ? null : deId, para_conta_id: Number(para.value) };
+    } else {
+      const pp = validarPartilha(s, part, v); if (!pp) return false;
+      payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: pp.partilhada, parte_dela: pp.parte_dela, ativa: st.ativa,
+        debito_direto: swDeb.checked, para_conta_id: null };
+      if (contaSel) payload.conta_id = contaSel.ler();
+    }
     if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
     else {
       await q(sb.from('despesas_recorrentes').update(payload).eq('id', x.id));
-      // atualiza o lançamento deste mês, se já existir (mantém o "recebido")
-      const atual = { valor: v, descricao: n, categoria: st.categoria, partilhada: p.partilhada, parte_dela: p.parte_dela,
-        data: m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m))) };
-      if (contaSel) atual.conta_id = payload.conta_id;
-      await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m));
+      // atualiza o lançamento deste mês, se já existir
+      if (tipo === 'transferencia') {
+        await q(sb.from('transferencias').update({
+          valor: v, nota: n, data: dataMes, de_conta: payload.conta_id != null ? payload.conta_id : p.conta_id, para_conta: payload.para_conta_id
+        }).eq('recorrente_id', x.id).gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m))));
+      } else {
+        const atual = { valor: v, descricao: n, categoria: st.categoria, partilhada: payload.partilhada, parte_dela: payload.parte_dela, data: dataMes };
+        if (contaSel) atual.conta_id = payload.conta_id;
+        await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m));
+      }
     }
     await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
     await carregarFixas();
@@ -740,7 +791,8 @@ function abrirFixa(x) {
 }
 
 // ===================== Contas e saldos =====================
-const TIPOS_CONTA = { corrente: 'À ordem', poupanca: 'Poupança', outra: 'Outra' };
+const TIPOS_CONTA = { corrente: 'À ordem', poupanca: 'Poupança', credito: 'Cartão de crédito', refeicao: 'Cartão refeição', outra: 'Outra' };
+const eCredito = c => !!c && c.tipo === 'credito';
 const contaPrincipal = () => S.contas.find(c => c.principal) || null;
 const contaDe = id => (id != null && S.contas.find(c => c.conta_id === id)) || contaPrincipal();
 const nomeConta = id => { const c = contaDe(id); return c ? c.nome : null; };
@@ -750,7 +802,7 @@ function avisosSaldo(proximos) {
   const resto = {};
   S.contas.forEach(c => { resto[c.conta_id] = Number(c.saldo_atual); });
   return proximos.map(x => {
-    const c = contaDe(x.conta_id); if (!c) return null;
+    const c = contaDe(x.conta_id); if (!c || eCredito(c)) return null;
     resto[c.conta_id] = r2(resto[c.conta_id] - Number(x.valor));
     return resto[c.conta_id] < 0 ? 'Saldo atual da ' + c.nome + ' não chega' : null;
   });
@@ -772,21 +824,30 @@ function blocoDinheiro() {
   const out = [glabel('O meu dinheiro')];
   if (!S.contas.length) {
     out.push(group(h('div', { class: 'hero' },
-      h('p', { class: 'k', style: 'margin:0', text: 'Indica quanto tens hoje em cada conta. A partir daí, ganhos e gastos atualizam o saldo sozinhos.' }),
+      h('p', { class: 'k', style: 'margin:0', text: 'Indica quanto tens hoje em cada conta (e quanto deves em cada cartão de crédito). A partir daí, ganhos e gastos atualizam o saldo sozinhos.' }),
       h('button', { type: 'button', class: 'btn primary', text: 'Indicar o saldo da conta principal', onclick: () => abrirConta(null) }))));
     return out;
   }
-  const total = soma(S.contas, c => c.saldo_atual), previsto = soma(S.contas, c => c.saldo_previsto);
+  const dinheiro = S.contas.filter(c => !eCredito(c)), cartoes = S.contas.filter(eCredito);
+  const disponivel = soma(dinheiro, c => c.saldo_atual);
+  const divida = soma(cartoes, c => Math.max(0, -Number(c.saldo_atual)));
+  const prevDisp = soma(dinheiro, c => c.saldo_previsto);
   out.push(group(h('div', { class: 'hero' },
-    h('div', { class: 'k', text: 'Total em ' + S.contas.length + (S.contas.length === 1 ? ' conta' : ' contas') }),
-    h('div', { class: 'big' + (total < 0 ? ' neg' : ''), text: fmt(total) }),
-    previsto !== total ? h('div', { class: 'k', text: 'Depois das fixas a vencer: ' + fmt(previsto) }) : null)));
-  out.push(h('div', { style: 'height:8px' }), lista(S.contas.map(c => h('div', { class: 'lrow' },
-    h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirConta(c) },
-      h('div', { class: 'rtitle', text: c.nome }),
-      h('div', { class: 'rsub', text: c.principal ? 'Principal' : TIPOS_CONTA[c.tipo] })),
-    h('div', { class: 'rval' + (Number(c.saldo_atual) < 0 ? ' neg' : ''), text: fmt(c.saldo_atual) }),
-    h('button', { type: 'button', class: 'mini', text: 'Ajustar', 'aria-label': 'Ajustar: ' + c.nome, onclick: () => abrirAjuste(c) })))));
+    h('div', { class: 'k', text: 'Disponível em ' + dinheiro.length + (dinheiro.length === 1 ? ' conta' : ' contas') }),
+    h('div', { class: 'big' + (disponivel < 0 ? ' neg' : ''), text: fmt(disponivel) }),
+    prevDisp !== disponivel ? h('div', { class: 'k', text: 'Depois das fixas a vencer: ' + fmt(prevDisp) }) : null),
+    cartoes.length ? kv('Dívida nos cartões', fmt(divida), divida > 0 ? 'neg' : '') : null,
+    cartoes.length ? kv('Património líquido', fmt(r2(disponivel - divida)), 'strong') : null));
+  const linha = c => {
+    const cred = eCredito(c), v = Number(c.saldo_atual);
+    return h('div', { class: 'lrow' },
+      h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirConta(c) },
+        h('div', { class: 'rtitle', text: c.nome }),
+        h('div', { class: 'rsub', text: cred ? 'Cartão · ' + (v < 0 ? 'em dívida' : 'sem dívida') : c.principal ? 'Principal' : TIPOS_CONTA[c.tipo] })),
+      h('div', { class: 'rval' + ((cred ? v < 0 : v < 0) ? ' neg' : ''), text: fmt(cred ? Math.abs(v) : v) }),
+      h('button', { type: 'button', class: 'mini', text: 'Ajustar', 'aria-label': 'Ajustar: ' + c.nome, onclick: () => abrirAjuste(c) }));
+  };
+  out.push(h('div', { style: 'height:8px' }), lista(dinheiro.concat(cartoes).map(linha)));
   out.push(h('div', { class: 'linha-acoes' },
     S.contas.length >= 2 ? h('button', { type: 'button', class: 'link b', text: 'Transferir', onclick: () => abrirTransferencia() }) : null,
     h('button', { type: 'button', class: 'link b', text: 'Nova conta', onclick: () => abrirConta(null) })));
@@ -797,37 +858,51 @@ function abrirConta(x) {
   const novo = !x, primeira = !S.contas.length;
   const stT = { categoria: TIPOS_CONTA[x ? x.tipo : 'corrente'] };
   const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', maxlength: '40', 'aria-label': 'Nome da conta', 'aria-required': 'true',
-    placeholder: primeira ? 'Ex.: CGD à ordem' : 'Ex.: Poupança', value: x ? x.nome : '' });
+    placeholder: primeira ? 'Ex.: CGD' : 'Ex.: MOEY', value: x ? x.nome : '' });
   const saldo = novo ? h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Saldo hoje', 'aria-required': 'true' }) : null;
+  const legenda = h('div', { class: 'split' });
+  const tipoAtual = () => Object.keys(TIPOS_CONTA).find(k => TIPOS_CONTA[k] === stT.categoria) || 'corrente';
   const swP = interruptor(x ? x.principal : primeira, 'Conta principal');
   if ((x && x.principal) || primeira) swP.disabled = true;
+  const chipsTipo = chips(Object.values(TIPOS_CONTA), stT, 'Tipo de conta');
+  const drawTipo = () => {
+    const cred = tipoAtual() === 'credito';
+    legenda.textContent = cred ? 'quanto deves hoje neste cartão' : 'quanto tens hoje nesta conta';
+    if (saldo) saldo.setAttribute('aria-label', cred ? 'Dívida hoje' : 'Saldo hoje');
+  };
+  chipsTipo.addEventListener('click', () => setTimeout(drawTipo, 0));
+  drawTipo();
   let s;
+  const cred0 = x && eCredito(x);
   const conteudo = [
-    novo ? [saldo, h('div', { class: 'split', text: 'quanto tens hoje nesta conta' })]
-      : group(kv('Saldo atual', fmt(x.saldo_atual), 'strong'),
-          x.data_ajuste ? kv('Último ajuste', diaCurto(x.data_ajuste) + ' · ' + fmt(x.saldo_ajuste)) : null,
+    novo ? [saldo, legenda]
+      : group(kv(cred0 ? 'Em dívida' : 'Saldo atual', fmt(cred0 ? Math.abs(Number(x.saldo_atual)) : x.saldo_atual), 'strong'),
+          x.data_ajuste ? kv('Último ajuste', diaCurto(x.data_ajuste) + ' · ' + fmt(cred0 ? Math.abs(Number(x.saldo_ajuste)) : x.saldo_ajuste)) : null,
           grow('', h('button', { type: 'button', class: 'link b', text: 'Ajustar ao valor real', onclick: () => abrirAjuste(x) }))),
     group(grow('Nome', nome)),
     glabel('Tipo', 'h3'),
-    group(h('div', { class: 'pad' }, chips(Object.values(TIPOS_CONTA), stT, 'Tipo de conta'))),
+    group(h('div', { class: 'pad' }, chipsTipo)),
     group(grow('Conta principal', swP)),
-    hint('Os gastos e ganhos entram na conta principal, a não ser que escolhas outra no próprio lançamento.'),
+    hint('Os gastos e ganhos entram na conta principal, a não ser que escolhas outra no próprio lançamento. Compras com cartão de crédito vão para o cartão; pagá-lo é uma transferência, não um gasto.'),
     !novo && !x.principal ? botaoApagar('Apagar conta', 'Apagar «' + x.nome + '»?', 'Os ajustes e transferências desta conta são apagados. Os gastos e ganhos mantêm-se e passam para a conta principal.', async () => {
       await q(sb.from('contas').delete().eq('id', x.conta_id));
-      s.fechar(); await recarregar(); toast('Conta apagada');
+      s.fechar(); await carregarFixas(); await recarregar(); toast('Conta apagada');
     }, () => s) : null,
     !novo && x.principal && S.contas.length > 1 ? hint('Para apagar esta conta, escolhe primeiro outra como principal.') : null
   ];
   s = sheet(novo ? 'Nova conta' : 'Editar conta', conteudo, async () => {
+    const tipo = tipoAtual();
     if (novo) {
       const v = parseNum(saldo.value);
-      if (!ok(v)) return s.erro('Indica quanto tens hoje nesta conta (pode ser 0).', saldo);
+      if (!ok(v)) return s.erro(tipo === 'credito' ? 'Indica quanto deves hoje (pode ser 0).' : 'Indica quanto tens hoje nesta conta (pode ser 0).', saldo);
     }
     const n = nome.value.trim();
     if (!n) return s.erro('Dá um nome à conta.', nome);
-    const tipo = Object.keys(TIPOS_CONTA).find(k => TIPOS_CONTA[k] === stT.categoria) || 'corrente';
-    if (novo) await q(sb.rpc('criar_conta', { p_nome: n, p_tipo: tipo, p_saldo: parseNum(saldo.value), p_principal: swP.checked }));
-    else {
+    if (tipo === 'credito' && swP.checked && !(x && x.principal) && !primeira) return s.erro('Um cartão de crédito não pode ser a conta principal.', swP);
+    if (novo) {
+      const v = parseNum(saldo.value);
+      await q(sb.rpc('criar_conta', { p_nome: n, p_tipo: tipo, p_saldo: tipo === 'credito' ? -Math.abs(v) : v, p_principal: swP.checked }));
+    } else {
       await q(sb.from('contas').update({ nome: n, tipo: tipo }).eq('id', x.conta_id));
       if (swP.checked && !x.principal) await q(sb.rpc('definir_principal', { p_conta: x.conta_id }));
     }
@@ -838,25 +913,27 @@ function abrirConta(x) {
 }
 
 function abrirAjuste(c) {
-  const atual = Number(c.saldo_atual);
-  const inp = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Saldo real hoje', 'aria-required': 'true', value: toInput(atual) });
+  const cred = eCredito(c), atual = Number(c.saldo_atual);
+  const mostra = v => (cred ? -v : v);   // no cartão mostra-se a dívida em positivo
+  const inp = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': cred ? 'Dívida real hoje' : 'Saldo real hoje', 'aria-required': 'true', value: toInput(mostra(atual)) });
   const info = h('div', { class: 'split', 'aria-live': 'polite' });
   const sinal = d => (d > 0 ? '+' : '−') + fmt(Math.abs(d));
   const upd = () => {
     const v = parseNum(inp.value);
-    const d = ok(v) ? r2(v - atual) : null;
-    info.textContent = 'A app calcula ' + fmt(atual) + (d && Math.abs(d) >= 0.005 ? ' · diferença ' + sinal(d) : '');
+    const d = ok(v) ? r2(v - mostra(atual)) : null;
+    info.textContent = 'A app calcula ' + fmt(mostra(atual)) + (cred ? ' em dívida' : '') + (d && Math.abs(d) >= 0.005 ? ' · diferença ' + sinal(d) : '');
   };
   inp.addEventListener('input', upd); upd();
   let s;
   s = sheet('Ajustar ' + c.nome, [inp, info,
-    hint('Escreve o saldo que vês hoje no banco. O que tiver data anterior a hoje deixa de mexer neste saldo; o que registares a partir de agora conta.')
+    hint(cred ? 'Escreve quanto deves hoje neste cartão (o valor do extrato ou da app do banco).'
+      : 'Escreve o saldo que vês hoje no banco. O que tiver data anterior a hoje deixa de mexer neste saldo; o que registares a partir de agora conta.')
   ], async () => {
     const v = parseNum(inp.value);
-    if (!ok(v)) return s.erro('Indica o saldo real.', inp);
-    const dif = Number(await q(sb.rpc('ajustar_saldo', { p_conta: c.conta_id, p_saldo: v })));
+    if (!ok(v)) return s.erro(cred ? 'Indica a dívida real.' : 'Indica o saldo real.', inp);
+    const dif = Number(await q(sb.rpc('ajustar_saldo', { p_conta: c.conta_id, p_saldo: cred ? -Math.abs(v) : v })));
     await recarregar();
-    toast(Math.abs(dif) < 0.005 ? 'Saldo confirmado' : 'Saldo ajustado (' + sinal(dif) + ')');
+    toast(Math.abs(dif) < 0.005 ? 'Saldo confirmado' : 'Saldo ajustado (' + sinal(cred ? -dif : dif) + ')');
   });
   inp.focus(); inp.select();
 }
@@ -921,8 +998,9 @@ function linhaItemAgenda(it) {
     return h('button', { type: 'button', class: 'lrow', onclick: () => abrirFixa(f) },
       h('span', { class: 'barra ag-pag', 'aria-hidden': 'true' }),
       h('div', { class: 'rmain' },
-        h('div', { class: 'rtitle', text: (f.debito_direto ? 'Débito direto: ' : 'Pagar ') + f.nome }),
-        h('div', { class: 'rsub', text: [f.debito_direto ? 'Sai sozinho' : 'Pagamento', S.contas.length > 1 ? nomeConta(f.conta_id) : null, f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
+        h('div', { class: 'rtitle', text: (f.debito_direto ? 'Débito direto: ' : f.para_conta_id != null ? 'Transferir: ' : 'Pagar ') + f.nome }),
+        h('div', { class: 'rsub', text: [f.para_conta_id != null ? 'De ' + nomeConta(f.conta_id) + ' para ' + nomeConta(f.para_conta_id) : (f.debito_direto ? 'Sai sozinho' : 'Pagamento'),
+          f.para_conta_id == null && S.contas.length > 1 ? nomeConta(f.conta_id) : null, f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
       h('div', { class: 'rval', text: fmt(f.valor) }),
       h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
   }
@@ -964,12 +1042,12 @@ function viewAgenda() {
 }
 
 // Escolha única em chips (aria-pressed)
-function escolha(opcoes, atual, rotulo, comPonto) {
+function escolha(opcoes, atual, rotulo, comPonto, aoMudar) {
   let valor = atual;
   const box = h('div', { class: 'chips', role: 'group', 'aria-label': rotulo });
   const btns = opcoes.map(([label, v]) => h('button', {
     type: 'button', class: 'chip', 'aria-pressed': String(v === valor),
-    onclick: () => { valor = v; btns.forEach((b, i) => b.setAttribute('aria-pressed', String(opcoes[i][1] === valor))); }
+    onclick: () => { valor = v; btns.forEach((b, i) => b.setAttribute('aria-pressed', String(opcoes[i][1] === valor))); if (aoMudar) aoMudar(valor); }
   }, comPonto ? h('i', { class: 'dot ag-' + v, 'aria-hidden': 'true' }) : null, label));
   box.append(...btns);
   return { el: box, valor: () => valor };
