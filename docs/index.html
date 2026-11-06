@@ -20,7 +20,7 @@
 :root{
   --bg:#f2f2f7; --card:#ffffff; --text:#000000; --muted:#6c6c70; --line:rgb(60 60 67 / .18);
   --accent:#0060df; --pos:#137a3f; --neg:#c62d22; --chip:#e5e5ea; --segon:#ffffff;
-  --warn-bg:#fff1cc; --warn-text:#7a4f00; --press:#e5e5ea; --skel:#e5e5ea; --on-accent:#ffffff;
+  --warn-bg:#fff1cc; --warn-text:#7a4f00; --press:#e5e5ea; --skel:#e5e5ea; --on-accent:#ffffff; --logo:#ea580c;
   /* escala fixa de z-index */
   --z-header:10; --z-tabbar:20; --z-toast:40;
   /* escala de sombras (valores por defeito do Tailwind) */
@@ -209,7 +209,7 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 .login{max-width:380px;margin:0 auto;padding:calc(env(safe-area-inset-top, 0px) + 16vh) 24px 40px;display:flex;flex-direction:column;gap:12px}
 .login h1{font-size:30px;margin:6px 0 0}
 .login > p{margin:0 0 14px;color:var(--muted)}
-.logo{width:72px;height:72px;border-radius:18px;background:var(--accent);color:var(--on-accent);font-weight:800;font-size:23px;display:grid;place-items:center}
+.logo{width:72px;height:72px;border-radius:18px;background:var(--logo);color:#fff;font-weight:800;font-size:23px;display:grid;place-items:center}
 .lfield{font-size:17px;padding:14px 16px;border-radius:12px;border:0;background:var(--card);color:var(--text)}
 .lfield[aria-invalid="true"]{box-shadow:0 0 0 2px var(--neg)}
 .lerr{color:var(--neg);font-size:15px;font-weight:600;margin:0}
@@ -272,8 +272,42 @@ button,a,[role="button"],.chip,.tab,.cal-dia{       /* toque imediato; sem sele�
 .top,main{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .tabbar{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
 
+/* Valor inválido num campo (marcado ao sair do campo) */
+.valorin[aria-invalid="true"],.ginput[aria-invalid="true"]{color:var(--neg)}
+
+/* Alvos de toque ≥ 44px sem mudar o desenho: área invisível, só em ecrãs táteis */
+@media (pointer:coarse){
+  .link,.mini,.chip,.gearbtn,.addbtn,.navbtn,.linkrow{position:relative}
+  .link::after,.mini::after,.chip::after,.gearbtn::after,.addbtn::after,.navbtn::after,.linkrow::after,.switch::before{content:"";position:absolute}
+  .link::after{inset:-4px -2px}
+  .link.small::after,.link.small2::after{inset:-10px -4px}
+  .mini::after{inset:-8px -4px}
+  .chip::after{inset:-6px -2px}
+  .gearbtn::after,.addbtn::after{inset:-3px}
+  .navbtn::after{inset:-6px}
+  .linkrow::after{inset:-10px 0}                   /* a linha toda abre o item, não só o texto */
+  .switch::before{inset:-7px -4px}
+  .grow .ginput{margin:-6px 0;padding:14px 0}     /* o campo ocupa a altura da linha; a linha não muda */
+  .pad > .ginput{margin:-4px 0;padding:12px 0}
+}
+
+/* Ecrã mais rápido de ler para quem pede menos transparência ou mais contraste */
+@media (prefers-reduced-transparency: reduce){
+  .top{background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none}
+  .tabbar{background:var(--card);-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@media (prefers-contrast: more){
+  :root{--line:rgb(60 60 67 / .5);--muted:#3a3a3c}
+  .group,.lfield{box-shadow:0 0 0 1px var(--line)}
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark){
+  :root{--line:rgb(170 170 175 / .7);--muted:#d1d1d6}
+}
+
+/* Reduzir movimento: sem deslocações nem escalas; ficam só fades curtos para mostrar o estado */
 @media (prefers-reduced-motion: reduce){
-  *,*::before,*::after{transition:none !important;animation:none !important}
+  *,*::before,*::after{animation:none !important;transition-property:opacity,background-color,color !important;transition-duration:120ms !important}
+  *:active{transform:none !important}
 }
 </style>
 </head>
@@ -358,14 +392,27 @@ const r2 = x => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
 const ok = n => typeof n === 'number' && isFinite(n);
 const soma = (arr, f) => r2(arr.reduce((a, x) => a + (Number(f(x)) || 0), 0));
 const pctTxt = n => String(Math.round(n * 10) / 10).replace('.', ',') + '%';
+// N\u00fameros \u00e0 portuguesa: 1234,56 \u00b7 1.234,56 \u00b7 1234.56 \u00b7 12.500 (= doze mil e quinhentos)
 function parseNum(s) {
   if (s == null) return null;
   let t = String(s).replace(/[^0-9,.\-]/g, '');
   if (!t) return null;
-  if (/,\d{1,2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
-  else t = t.replace(/,/g, '');
+  const neg = t.charAt(0) === '-';
+  t = t.replace(/-/g, '');
+  if (!t) return null;
+  const v = t.indexOf(',') >= 0, p = t.indexOf('.') >= 0;
+  if (v && p) {                       // o \u00faltimo separador \u00e9 o decimal; o outro \u00e9 de milhares
+    const dec = t.lastIndexOf(',') > t.lastIndexOf('.') ? ',' : '.';
+    t = t.split(dec === ',' ? '.' : ',').join('');
+    if (t.split(dec).length > 2) return NaN;
+    t = t.replace(dec, '.');
+  } else if (v) {
+    t = t.split(',').length === 2 ? t.replace(',', '.') : t.replace(/,/g, '');
+  } else if (p && /^[1-9]\d{0,2}(\.\d{3})+$/.test(t)) {
+    t = t.replace(/\./g, '');          // ponto com grupos de 3 = milhares
+  }
   const n = Number(t);
-  return ok(n) ? r2(n) : NaN;
+  return ok(n) ? r2(neg ? -n : n) : NaN;
 }
 const toInput = v => (v == null || v === '') ? '' : Number(v).toFixed(2).replace('.', ',');
 const pad2 = n => String(n).padStart(2, '0');
@@ -1739,6 +1786,15 @@ sb.auth.onAuthStateChange(ev => {
     S.calc = { init: false, eu: '', ela: '', valor: '' }; S.bloqueado = false;
     setTimeout(renderLogin, 0);
   }
+});
+
+// Valores: ao sair do campo mostra o n\u00famero como a app o leu (12.500 \u2192 12500,00); inv\u00e1lido fica marcado
+document.addEventListener('focusout', e => {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || el.inputMode !== 'decimal' || !el.value.trim()) return;
+  const n = parseNum(el.value);
+  if (ok(n)) { if (el.value !== toInput(n)) el.value = toInput(n); if (el.getAttribute('aria-invalid') === 'true' && !el.hasAttribute('aria-describedby')) el.removeAttribute('aria-invalid'); }
+  else el.setAttribute('aria-invalid', 'true');
 });
 
 // Ao voltar \u00e0 app (ex.: depois de pagar com Apple Pay), atualiza

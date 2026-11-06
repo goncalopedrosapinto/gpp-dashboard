@@ -41,7 +41,7 @@ open(os.path.join(DIST, 'index.html'), 'w', encoding='utf-8').write(html)
 
 # Ícones
 def icone(size):
-    img = Image.new('RGB', (size, size), '#0a6cff')
+    img = Image.new('RGB', (size, size), '#ea580c')
     d = ImageDraw.Draw(img)
     s = size / 180
     # três barras a subir

@@ -58,6 +58,10 @@ Segue o [ibelick/ui-skills](https://github.com/ibelick/ui-skills) (`baseline-ui`
 - Carregamento com esqueletos estáticos; estados vazios com uma ação.
 - Listas em `ul`/`li`, títulos `h1` → `h2` → `h3`, foco visível, contraste AA (verificado com axe-core no teste de ponta a ponta).
 - [mobile-native](https://github.com/emilkowalski/skills) (Emil Kowalski): sem elástico da página, toque imediato (`touch-action: manipulation`), sem seleção de texto nos controlos, feedback ao premir (`scale(0.97)`, 100 ms), inputs ≥16px, `interactive-widget=resizes-content`, `color-scheme`, margens seguras laterais.
+- Números à portuguesa: `1234,56`, `1.234,56`, `1234.56` e `12.500` (= doze mil e quinhentos). Ao sair do campo o valor aparece como a app o leu; texto inválido fica marcado e não se grava.
+- Alvos de toque ≥ 44×44 px em ecrãs táteis com área invisível (`::after`/`::before`), sem mudar o desenho; medido em todos os ecrãs auditados no teste de ponta a ponta.
+- Respeita `prefers-reduced-transparency` (cabeçalho e barra sólidos), `prefers-contrast: more` (linhas e texto secundário mais fortes) e `prefers-reduced-motion` (sem deslocações nem escalas, ficam fades de 120 ms).
+- Logo e ícone em laranja (`#ea580c`); a cor de ação continua azul, porque o laranja já é a cor da agenda Trabalho e dos avisos.
 - Sem `letter-spacing`, sem gradientes, sem animações além de ≤150 ms em controlos; respeita `prefers-reduced-motion`.
 
 ## Segurança

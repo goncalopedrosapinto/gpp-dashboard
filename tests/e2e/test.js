@@ -157,7 +157,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const tem = async t => { await page.waitForFunction(x => document.body.innerText.includes(x), t, { timeout: 5000 }).catch(() => {}); return (await texto()).includes(t); };
   const fechado = () => page.waitForSelector('dialog.sheet', { state: 'detached', timeout: 5000 });
   const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const a11y = [];
+  const a11y = [], alvosPeq = [];
   async function auditar(nome) {
     const v = await page.evaluate(async src => {
       if (!window.axe) { const sc = document.createElement('script'); sc.textContent = src; document.head.append(sc); }
@@ -165,6 +165,28 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
       return r.violations.map(x => ({ id: x.id, impact: x.impact, n: x.nodes.length, alvo: x.nodes.slice(0, 2).map(n => n.target.join(' ')).join(' | ') }));
     }, AXE);
     v.forEach(x => a11y.push(nome + ': ' + x.id + ' [' + x.impact + '] x' + x.n + ' -> ' + x.alvo));
+    // Alvos de toque: ≥ 44×44 px contando com a área invisível (::before/::after com insets negativos)
+    const peq = await page.evaluate(() => {
+      const px = v => parseFloat(v) || 0, out = [];
+      const aberto = document.querySelector('dialog[open]');
+      for (const el of document.querySelectorAll('button, a[href], select, input:not(.sr-only)')) {
+        if (el.closest('[hidden]') || (aberto && !aberto.contains(el)) || (el.closest('dialog') && !el.closest('dialog').open)) continue;
+        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        if (!r.width || !r.height || cs.visibility === 'hidden' || cs.display === 'none') continue;
+        let w = r.width, h = r.height;
+        for (const ps of ['::before', '::after']) {
+          const q = getComputedStyle(el, ps);
+          if (q.content === 'none' || q.position !== 'absolute') continue;
+          const t = Math.min(0, px(q.top)), b = Math.min(0, px(q.bottom)), l = Math.min(0, px(q.left)), rr = Math.min(0, px(q.right));
+          w = Math.max(w, r.width - l - rr); h = Math.max(h, r.height - t - b);
+        }
+        // um campo de texto dentro de uma linha (.grow) usa a linha toda; conta a altura da linha
+        if (el.matches('input, select') && el.closest('.grow')) h = Math.max(h, el.closest('.grow').getBoundingClientRect().height);
+        if (w < 43.5 || h < 43.5) out.push((el.getAttribute('aria-label') || el.textContent.trim().slice(0, 18) || el.className) + ' ' + Math.round(w) + '×' + Math.round(h));
+      }
+      return [...new Set(out)];
+    });
+    peq.forEach(x => alvosPeq.push(nome + ': ' + x));
   }
   const apagarNaFolha = async () => { await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]'); await page.click('dialog.alert .danger'); await fechado(); };
   const tab = async n => { await page.click(`.tab:has-text("${n}")`); await page.waitForTimeout(250); };
@@ -180,6 +202,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.goto(BASE + '/app/index.html');
   await page.waitForSelector('form.login');
   await shot('01-login');
+  check((await page.evaluate(() => getComputedStyle(document.querySelector('.logo')).backgroundColor)) === 'rgb(234, 88, 12)', 'logo laranja no ecrã de entrada');
 
   console.log('Entrada');
   await page.fill('input[type=email]', USER.email);
@@ -232,6 +255,23 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await shot('02b-contas');
   await auditar('contas');
 
+
+  console.log('Números à portuguesa');
+  await tab('Gastos');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  const leu = async t => { await page.fill('.sheet [aria-label="Valor"]', t); await page.click('.sheet [aria-label="Descrição"]'); return page.inputValue('.sheet [aria-label="Valor"]'); };
+  const casos = [['12.500', '12500,00'], ['1.250', '1250,00'], ['1.234,56', '1234,56'], ['12,5', '12,50'], ['12.5', '12,50'], ['1234.56', '1234,56'], ['2.500,00', '2500,00'], ['0.500', '0,50']];
+  const errados = [];
+  for (const [t, e] of casos) { const r = await leu(t); if (r !== e) errados.push(t + ' → ' + r + ' (esperado ' + e + ')'); }
+  check(errados.length === 0, 'números à portuguesa lidos como se escrevem (12.500 = 12 500 €)' + (errados.length ? ': ' + errados.join('; ') : ''));
+  await leu('abc');
+  check((await page.getAttribute('.sheet [aria-label="Valor"]', 'aria-invalid')) === 'true', 'valor inválido fica marcado ao sair do campo');
+  await page.fill('.sheet [aria-label="Valor"]', '1.250');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Teste milhares');
+  await guardar();
+  check((await bd("select valor from despesas where descricao = 'Teste milhares'"))[0].valor === 1250, '1.250 gravado como 1250 € (não 1,25 €)');
+  await page.click('.lrow:has-text("Teste milhares")'); await page.waitForSelector('dialog.sheet[open]');
+  await apagarNaFolha();
 
   console.log('Ganhos');
   await tab('Ganhos');
@@ -813,6 +853,7 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   check(true, 'terminar sessão volta ao ecrã de entrada');
   check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'sem scroll horizontal');
 
+  check(alvosPeq.length === 0, 'alvos de toque ≥ 44×44 px em todos os ecrãs auditados' + (alvosPeq.length ? '\n      ' + alvosPeq.slice(0, 25).join('\n      ') : ''));
   check(a11y.length === 0, 'axe-core: sem violações de acessibilidade' + (a11y.length ? '\n      ' + a11y.join('\n      ') : ''));
   check(erros.length === 0, 'sem erros de JavaScript' + (erros.length ? ': ' + erros.join(' | ') : ''));
   const esperados = ['token inválido', 'permission denied for table ganhos'];

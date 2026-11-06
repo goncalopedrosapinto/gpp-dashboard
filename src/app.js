@@ -74,14 +74,27 @@ const r2 = x => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
 const ok = n => typeof n === 'number' && isFinite(n);
 const soma = (arr, f) => r2(arr.reduce((a, x) => a + (Number(f(x)) || 0), 0));
 const pctTxt = n => String(Math.round(n * 10) / 10).replace('.', ',') + '%';
+// Números à portuguesa: 1234,56 · 1.234,56 · 1234.56 · 12.500 (= doze mil e quinhentos)
 function parseNum(s) {
   if (s == null) return null;
   let t = String(s).replace(/[^0-9,.\-]/g, '');
   if (!t) return null;
-  if (/,\d{1,2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
-  else t = t.replace(/,/g, '');
+  const neg = t.charAt(0) === '-';
+  t = t.replace(/-/g, '');
+  if (!t) return null;
+  const v = t.indexOf(',') >= 0, p = t.indexOf('.') >= 0;
+  if (v && p) {                       // o último separador é o decimal; o outro é de milhares
+    const dec = t.lastIndexOf(',') > t.lastIndexOf('.') ? ',' : '.';
+    t = t.split(dec === ',' ? '.' : ',').join('');
+    if (t.split(dec).length > 2) return NaN;
+    t = t.replace(dec, '.');
+  } else if (v) {
+    t = t.split(',').length === 2 ? t.replace(',', '.') : t.replace(/,/g, '');
+  } else if (p && /^[1-9]\d{0,2}(\.\d{3})+$/.test(t)) {
+    t = t.replace(/\./g, '');          // ponto com grupos de 3 = milhares
+  }
   const n = Number(t);
-  return ok(n) ? r2(n) : NaN;
+  return ok(n) ? r2(neg ? -n : n) : NaN;
 }
 const toInput = v => (v == null || v === '') ? '' : Number(v).toFixed(2).replace('.', ',');
 const pad2 = n => String(n).padStart(2, '0');
@@ -1455,6 +1468,15 @@ sb.auth.onAuthStateChange(ev => {
     S.calc = { init: false, eu: '', ela: '', valor: '' }; S.bloqueado = false;
     setTimeout(renderLogin, 0);
   }
+});
+
+// Valores: ao sair do campo mostra o número como a app o leu (12.500 → 12500,00); inválido fica marcado
+document.addEventListener('focusout', e => {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || el.inputMode !== 'decimal' || !el.value.trim()) return;
+  const n = parseNum(el.value);
+  if (ok(n)) { if (el.value !== toInput(n)) el.value = toInput(n); if (el.getAttribute('aria-invalid') === 'true' && !el.hasAttribute('aria-describedby')) el.removeAttribute('aria-invalid'); }
+  else el.setAttribute('aria-invalid', 'true');
 });
 
 // Ao voltar à app (ex.: depois de pagar com Apple Pay), atualiza
