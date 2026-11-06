@@ -72,8 +72,7 @@ begin
    where r.id = new.recorrente_id and r.variavel;
   return null;
 end $$;
-drop trigger if exists atualizar_estimativa on public.despesas;
-create trigger atualizar_estimativa after insert or update of valor, estimado on public.despesas
+create or replace trigger atualizar_estimativa after insert or update of valor, estimado on public.despesas
   for each row when (new.recorrente_id is not null and not new.estimado)
   execute function public.atualizar_estimativa();
 revoke execute on function public.atualizar_estimativa() from public, anon;
