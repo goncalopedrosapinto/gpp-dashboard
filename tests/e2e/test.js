@@ -43,7 +43,7 @@ function subDe(hdr) {
   try { const p = JSON.parse(Buffer.from(parts[1], 'base64url').toString()); return p.role === 'authenticated' ? p.sub : null; } catch (e) { return null; }
 }
 const ident = k => { if (!/^[a-z_][a-z0-9_]*$/.test(k)) throw new Error('identificador inválido ' + k); return '"' + k + '"'; };
-const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados'];
+const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay', 'registar_notificacao', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados'];
 const COMPOSTAS = ['garantir_config'];
 const log = [];
 
@@ -370,6 +370,12 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const rx = await rest('POST', 'rpc/registar_apple_pay', '', {}, JSON.stringify({ token: 'falso', valor: '1' }));
   check(r1.status === 200 && r2.status === 200, 'Atalho regista gastos com o token');
   check(rx.status === 400, 'token falso recusado');
+  const antesN = (await bd("select count(*)::int n from despesas where valor = 5.4"))[0].n;
+  const rw = await rest('POST', 'rpc/registar_apple_pay', '', { apikey: 'x' }, JSON.stringify({ token, valor: '€5.40', comerciante: 'Padaria Ramos', cartao: 'Visa' }));
+  const rn = await rest('POST', 'rpc/registar_notificacao', '', { apikey: 'x' }, JSON.stringify({ token, tipo: 'compra', valor: '5,40', entidade: 'PADARIA RAMOS', conta: 'CGD à ordem' }));
+  const linhasN = await bd("select fonte, comerciante from despesas where valor = 5.4");
+  check(rw.status === 200 && rn.body === 'duplicado' && linhasN.length === antesN + 1 && linhasN[0].fonte === 'ambas' && linhasN[0].comerciante === 'Padaria Ramos', 'compra pela Wallet e pela notificação do banco fica uma só (dados da Wallet)');
+  await bd('delete from despesas where valor = 5.4');   // não mexe nos totais seguintes
   check((await rest('GET', 'ganhos', '?select=*', {}, null)).status === 403, 'sem sessão não se lêem ganhos');
   await tab('Gastos');
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -509,7 +515,8 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await page.click('.sheet .chip:has-text("Transferência")');
   check(await page.isVisible('.sheet [aria-label="De"]') && await page.isHidden('.sheet [aria-label="Partilhada"]') && await page.isHidden('.sheet [aria-label="Conta"]'), 'transferência mostra De/Para e esconde categoria, partilha e conta');
   await page.fill('.sheet [aria-label="Nome"]', 'Pagamento Caetano GO');
-  await page.fill('.sheet [aria-label="Dia do pagamento"]', '8');
+  const diaT = Math.min(new Date().getDate() + 2, 28);   // um dia ainda por vir este mês
+  await page.fill('.sheet [aria-label="Dia do pagamento"]', String(diaT));
   await page.selectOption('.sheet [aria-label="De"]', { label: 'Poupança' });
   await page.selectOption('.sheet [aria-label="Para"]', { label: 'Poupança' });
   await page.click('.sheet .snav .link.b');
@@ -522,8 +529,8 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   const ft = (await bd("select r.id, c.nome de, d.nome para, r.categoria from despesas_recorrentes r join contas c on c.id = r.conta_id join contas d on d.id = r.para_conta_id where r.nome = 'Pagamento Caetano GO'"))[0];
   check(ft && ft.de === 'Poupança' && ft.para === 'Caetano GO' && ft.categoria === null, 'fixa gravada como transferência Poupança → Caetano GO');
   const tfx = await bd('select valor, data from transferencias where recorrente_id = $1', [ft.id]);
-  check(tfx.length === 1 && tfx[0].valor === 127 && tfx[0].data === '2026-11-08' && (await bd("select count(*)::int n from despesas where descricao = 'Pagamento Caetano GO'"))[0].n === 0,
-    'gerou a transferência de 8 de novembro e nenhum gasto');
+  check(tfx.length === 1 && tfx[0].valor === 127 && tfx[0].data === '2026-11-' + String(diaT).padStart(2, '0') && (await bd("select count(*)::int n from despesas where descricao = 'Pagamento Caetano GO'"))[0].n === 0,
+    'gerou a transferência do mês e nenhum gasto');
   txt = await semEsp();
   check(txt.includes('Gastosfixos675,00€') && txt.includes('Transferênciasentrecontas127,00€'), 'a transferência não entra no total de gastos fixos');
   check(txt.toLowerCase().includes('poupança·127,00€') && (await texto()).includes('Transferência para Caetano GO'), 'fixas agrupadas pela conta de onde sai o dinheiro');
@@ -537,8 +544,8 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   cg = await cartao();
   check(cg.p === cg.s + 130, 'saldo previsto do cartão já conta com o pagamento de 130 €');
   await tab('Agenda');
-  await page.click('.cal-dia:has(.cal-num:text-is("8"))');
-  check(await tem('Transferir: Pagamento Caetano GO') && await tem('De Poupança para Caetano GO'), 'agenda mostra "Transferir" com De → Para no dia 8');
+  await page.click('.cal-dia:has(.cal-num:text-is("' + diaT + '"))');
+  check(await tem('Transferir: Pagamento Caetano GO') && await tem('De Poupança para Caetano GO'), 'agenda mostra "Transferir" com De → Para no dia do pagamento');
   await page.click('.cal-dia.hoje');   // volta a hoje para a secção da agenda
   await tab('Gastos');
   await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');

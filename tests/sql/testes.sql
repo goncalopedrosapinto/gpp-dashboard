@@ -378,4 +378,73 @@ do $$ declare j jsonb; l jsonb; begin
 end $$;
 reset role;
 
+\echo '--- T17: Wallet + notificacoes do banco sem duplicados ---'
+reset role;
+insert into auth.users values ('44444444-4444-4444-4444-444444444444') on conflict do nothing;
+do $$ begin
+  if public.ler_valor('€12.50') <> 12.5 or public.ler_valor('1,250.00') <> 1250 or public.ler_valor('1.250,00') <> 1250
+     or public.ler_valor('12,5') <> 12.5 or public.ler_valor('12.500') <> 12500 or public.ler_valor('0.500') <> 0.5
+     or public.ler_valor('abc') is not null then raise exception 'T17 falhou: ler_valor'; end if;
+end $$;
+set role authenticated;
+set request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+select (garantir_config()).token_atalho as tk4 \gset
+select criar_conta('CGD', 'corrente', 1000, true) as c4 \gset
+select criar_conta('MOEY', 'poupanca', 500, false) as m4 \gset
+select set_config('t.c4x', :'c4', false) \gset
+select set_config('t.m4x', :'m4', false) \gset
+insert into despesas_recorrentes (nome, valor, dia_vencimento, categoria, variavel, debito_direto, inicio)
+  values ('Água', 40, extract(day from hoje_lisboa())::int, 'Casa', true, true, date_trunc('month', hoje_lisboa())::date);
+insert into despesas_recorrentes (nome, valor, dia_vencimento, conta_id, para_conta_id, inicio)
+  values ('Pagamento cartão', 127, extract(day from hoje_lisboa())::int, :m4, :c4, date_trunc('month', hoje_lisboa())::date);
+select gerar_recorrentes() as g4;
+reset role; set role anon; reset request.jwt.claim.sub;
+select set_config('t.tk4', :'tk4', false) \gset
+do $$ declare tk text := current_setting('t.tk4'); r text; a bigint; b bigint; begin
+  -- 1) Wallet primeiro, banco depois → uma só compra
+  a := registar_apple_pay(tk, '€23.40', 'Pingo Doce', 'Moey! Visa');
+  r := registar_notificacao(tk, 'compra', '23.40', 'PINGO DOCE AVEIRO', 'MOEY');
+  if r <> 'duplicado' then raise exception 'T17 falhou: banco depois da Wallet devolveu %', r; end if;
+  -- 2) Banco primeiro, Wallet depois → uma só, com os dados da Wallet
+  r := registar_notificacao(tk, 'compra', '8.90', 'COMPRA CONT 4512', 'CGD');
+  b := registar_apple_pay(tk, '€8.90', 'Continente', 'Caixa Visa');
+  -- 3) a mesma notificação repetida
+  r := registar_notificacao(tk, 'compra', '8.90', 'COMPRA CONT 4512', 'CGD');
+  -- 4) duas compras iguais pela Wallet são duas compras
+  perform registar_apple_pay(tk, '€1.20', 'Café', 'Caixa Visa');
+  perform registar_apple_pay(tk, '€1.20', 'Café', 'Caixa Visa');
+  -- 5) débito direto confirma a fixa variável com o valor real
+  r := registar_notificacao(tk, 'debito', '43,17', 'SMAS AVEIRO', 'CGD');
+  if r <> 'fixa confirmada' then raise exception 'T17 falhou: debito devolveu %', r; end if;
+  -- 6) débito do pagamento do cartão (transferência fixa) não cria gasto
+  r := registar_notificacao(tk, 'debito', '127.00', 'Caetano GO', 'MOEY');
+  if r <> 'transferencia fixa' then raise exception 'T17 falhou: pagamento do cartao devolveu %', r; end if;
+  -- 7) débito sem fixa → por rever; recebimento → ganho; promoção → ignorada
+  r := registar_notificacao(tk, 'debito', '15', 'Ginásio X', 'CGD');
+  if r <> 'debito por rever' then raise exception 'T17 falhou: debito solto devolveu %', r; end if;
+  r := registar_notificacao(tk, 'recebimento', '1.850,00', 'Caetano Baviera', 'CGD');
+  if r <> 'ganho' then raise exception 'T17 falhou: recebimento devolveu %', r; end if;
+  if registar_notificacao(tk, 'recebimento', '1850.00', 'Caetano Baviera', 'CGD') <> 'repetida' then raise exception 'T17 falhou: recebimento repetido'; end if;
+  if registar_notificacao(tk, 'outro', '', 'Promoção') <> 'ignorado' then raise exception 'T17 falhou: promocao'; end if;
+  begin perform registar_notificacao('falso', 'compra', '1'); raise exception 'T17 falhou: token falso';
+  exception when sqlstate '28000' then null; end;
+end $$;
+reset role; set role authenticated;
+set request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ declare m bigint := current_setting('t.m4x')::bigint; c bigint := current_setting('t.c4x')::bigint; begin
+  if (select count(*) from despesas where valor = 23.40) <> 1 then raise exception 'T17 falhou: Wallet+banco duplicou'; end if;
+  if (select fonte from despesas where valor = 23.40) <> 'ambas' or (select conta_id from despesas where valor = 23.40) <> m then raise exception 'T17 falhou: compra Moey (fonte/conta)'; end if;
+  if (select count(*) from despesas where valor = 8.90) <> 1 then raise exception 'T17 falhou: banco+Wallet duplicou ou repetida entrou'; end if;
+  if (select comerciante from despesas where valor = 8.90) <> 'Continente' or (select conta_id from despesas where valor = 8.90) <> c then raise exception 'T17 falhou: dados da Wallet nao ganharam'; end if;
+  if (select count(*) from despesas where valor = 1.20) <> 2 then raise exception 'T17 falhou: duas compras iguais pela Wallet'; end if;
+  if (select count(*) from despesas where descricao = 'Água') <> 1 or (select valor from despesas where descricao = 'Água') <> 43.17
+     or (select estimado from despesas where descricao = 'Água') then raise exception 'T17 falhou: agua nao confirmada'; end if;
+  if (select valor from despesas_recorrentes where nome = 'Água') <> 43.17 then raise exception 'T17 falhou: estimativa da agua'; end if;
+  if exists (select 1 from despesas where valor = 127) then raise exception 'T17 falhou: pagamento do cartao virou gasto'; end if;
+  if (select count(*) from despesas where descricao = 'Ginásio X' and categoria is null and origem = 'apple_pay') <> 1 then raise exception 'T17 falhou: debito por rever'; end if;
+  if (select count(*) from ganhos where valor = 1850 and conta_id = c and fonte = 'notificacao') <> 1 then raise exception 'T17 falhou: ganho'; end if;
+  raise notice 'wallet + banco sem duplicados: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

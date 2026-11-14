@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.9 · nov 2026';
+const VERSAO = 'v1.10 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
 const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
@@ -137,6 +137,7 @@ const parte = x => (x.partilhada && x.parte_dela != null) ? Number(x.parte_dela)
 const recebidoDe = x => (x.partilhada && x.recebido) ? parte(x) : 0;
 const custo = x => r2(Number(x.valor) - recebidoDe(x));
 const porReceber = x => x.partilhada && !x.recebido;
+const fonteTxt = x => (x.fonte === 'notificacao' ? 'Notificação do banco' : x.fonte === 'ambas' ? 'Apple Pay + banco' : 'Apple Pay');
 const porRever = x => x.origem === 'apple_pay' && !x.categoria;
 
 let toastT;
@@ -419,7 +420,7 @@ const FILTROS = { todas: () => true, rever: x => porRever(x) || !!x.estimado, pa
 function linhaDespesa(x) {
   const tags = [];
   if (x.categoria) tags.push(x.categoria); else if (x.origem === 'apple_pay') tags.push('Por rever');
-  if (x.origem === 'apple_pay') tags.push('Apple Pay');
+  if (x.origem === 'apple_pay') tags.push(fonteTxt(x));
   if (x.origem === 'recorrente') tags.push('Fixa');
   if (x.estimado) tags.push('Por confirmar');
   const tp = tagsPartilha(x); if (tp) tags.push(tp);
@@ -459,7 +460,7 @@ function viewGanhos() {
   out.push(glabel('Lançamentos'), lista(S.ganhos.map(x => h('button', { type: 'button', class: 'lrow', onclick: () => abrirGanho(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.descricao || x.categoria || 'Ganho' }),
-      h('div', { class: 'rsub', text: [diaCurto(x.data), x.categoria].filter(Boolean).join(' · ') })),
+      h('div', { class: 'rsub', text: [diaCurto(x.data), x.categoria, x.fonte === 'notificacao' ? 'Notificação do banco' : null].filter(Boolean).join(' · ') })),
     h('div', { class: 'rval pos', text: fmt(x.valor) }),
     h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))));
   return out;
@@ -577,6 +578,7 @@ function viewAjustes() {
     glabel('Atalho do iPhone · registo automático'),
     group(
       linhaCopiar('URL', url, url.replace('https://', '')),
+      linhaCopiar('URL banco', SUPABASE_URL + '/rest/v1/rpc/registar_notificacao', 'rpc/registar_notificacao'),
       linhaCopiar('Chave', SUPABASE_KEY, SUPABASE_KEY.slice(0, 18) + '…'),
       linhaCopiar('Token', tk, tk ? tk.slice(0, 8) + '…' + tk.slice(-4) : '—')
     ),
@@ -670,7 +672,7 @@ function abrirDespesa(x, preset) {
   const contaSel = seletorConta(x ? x.conta_id : null);
 
   let origem = null;
-  if (x && x.origem === 'apple_pay') origem = ['Apple Pay', x.cartao, x.comerciante].filter(Boolean).join(' · ');
+  if (x && x.origem === 'apple_pay') origem = [fonteTxt(x), x.cartao, x.comerciante].filter(Boolean).join(' · ');
   if (x && x.origem === 'recorrente') origem = x.estimado ? 'Valor estimado pela média das últimas faturas. Escreve o valor real e guarda.' : 'Lançado a partir de uma despesa fixa';
   const titulo = x ? (x.descricao || x.comerciante || 'Sem descrição') : '';
 
