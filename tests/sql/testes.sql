@@ -550,4 +550,24 @@ do $$ begin
 end $$;
 reset role;
 
+\echo '--- T20: imoveis, inquilinos e recebimentos ---'
+set role authenticated;
+set request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ declare im bigint; iq bigint; d bigint; begin
+  insert into imoveis (nome, categoria) values ('T1 Esmoriz', 'T1 Esmoriz') returning id into im;
+  insert into inquilinos (imovel_id, nome, renda, dia_pagamento) values (im, 'Ana', 650, 8) returning id into iq;
+  insert into despesas (valor, descricao, categoria) values (20, 'Água Esmoriz', 'T1 Esmoriz') returning id into d;
+  insert into recebimentos (imovel_id, inquilino_id, valor, tipo, mes_ref) values (im, iq, 650, 'renda', date_trunc('month', hoje_lisboa())::date);
+  insert into recebimentos (imovel_id, inquilino_id, valor, tipo, despesa_id) values (im, iq, 20, 'despesa', d);
+  begin insert into recebimentos (imovel_id, valor, tipo) values (im, 10, 'renda'); raise exception 'T20 falhou: renda sem mes';
+  exception when check_violation then null; end;
+  if (select sum(valor) from recebimentos) - (select sum(valor) from despesas where categoria = 'T1 Esmoriz') <> 650 then raise exception 'T20 falhou: balanco'; end if;
+end $$;
+set request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  if exists (select 1 from imoveis) or exists (select 1 from inquilinos) or exists (select 1 from recebimentos) then raise exception 'T20 falhou: Bia ve o imovel'; end if;
+  raise notice 'inquilinos: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'
