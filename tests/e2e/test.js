@@ -381,12 +381,28 @@ function ferramentas(page, quem) {
   await G.guardar();
   await G.shot('06c-categorias');
   await G.auditar('categorias');
+  await page.click('button:has-text("Nova conta")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Nome da conta"]', 'CGD');
+  await G.guardar();
+  await G.toastTem('Conta criada');
+  check((await G.texto()).includes('CGD') && !(await G.texto()).includes('Saldo'), 'conta bancária criada só com o nome, sem saldo');
   await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
   await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
   check(await page.$('.sheet .chip:text-is("Casa Esmoriz")') !== null && await page.$('.sheet .chip:text-is("Casa")') === null, 'nova despesa já mostra «Casa Esmoriz»');
   await page.check('.sheet [aria-label="Repete todos os meses"]');
   check(await page.isVisible('.sheet [aria-label="Valor variável"]'), '«Repete todos os meses» também oferece «Valor variável»');
+  await page.check('.sheet [aria-label="Débito direto"]');
+  check(await page.isVisible('.sheet [aria-label="Sai da conta"]'), 'com débito direto aparece «Sai da conta»');
   await page.keyboard.press('Escape'); await G.fechado();
+  await page.click('[aria-label="Despesas fixas"]'); await page.waitForSelector('h1:has-text("Fixas")');
+  await page.click('.lrow:has(.rtitle:text-is("Be Fit"))'); await page.waitForSelector('dialog.sheet[open]');
+  await page.selectOption('.sheet [aria-label="Sai da conta"]', { label: 'CGD' });
+  await G.auditar('fixa com conta');
+  await G.guardar();
+  const bf = (await bd("select c.nome from despesas_recorrentes r join contas c on c.id = r.conta_id where r.nome = 'Be Fit'"))[0];
+  check(bf && bf.nome === 'CGD' && (await G.texto()).includes('Débito direto · CGD'), 'Be Fit: débito direto da CGD gravado e mostrado nas fixas');
+  await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
+  check((await G.texto()).includes('Débito direto · CGD'), '«Por pagar» mostra de que conta sai o débito');
 
   // ===== Em comum (Gonçalo) =====
   console.log('Em comum');
