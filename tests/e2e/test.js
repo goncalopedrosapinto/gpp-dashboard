@@ -415,7 +415,7 @@ function ferramentas(page, quem) {
   await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
   check((await G.texto()).includes('Débito direto · CGD'), '«Por pagar» mostra de que conta sai o débito');
 
-  // ===== Inquilinos (conta corrente) =====
+  // ===== Inquilinos: renda + despesas cobradas − transferências =====
   console.log('Inquilinos');
   await bd("insert into despesas (owner, data, valor, descricao, categoria) values ($1, current_date - 3, 644.30, 'Obras antes do contrato', 'Casa Esmoriz')", [USER.id]);
   await G.tab('Inquilinos');
@@ -430,29 +430,31 @@ function ferramentas(page, quem) {
   await page.fill('.sheet [aria-label="Renda mensal"]', '650');
   await G.auditar('novo inquilino');
   await G.guardar();
-  check(await G.tem('Deve 650,00') && (await page.$$('button:has-text("Novo inquilino")')).length === 0, 'Ana fica a dever a renda deste mês (650 €); não há botão para criar mais inquilinos no ecrã');
-  await page.click('[aria-label^="Pagou: Renda de"]'); await page.waitForSelector('dialog.sheet[open]');
-  check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '650,00' && await G.tem('Ana pagou'), '«Pagou» na renda já vem com 650 €');
-  await G.auditar('pagou renda');
-  await G.guardar();
-  check(await G.tem('Tem tudo pago'), 'depois de pagar a renda: tem tudo pago');
+  check(await G.tem('Deve 650,00') && (await page.$$('button:has-text("Novo inquilino")')).length === 0, 'Ana deve a renda deste mês (650 €); um só inquilino por imóvel');
   await page.click('button:has-text("Cobrar despesa")'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.getAttribute('.sheet .chip:has-text("Já registada")', 'aria-pressed')) === 'true', 'cobrar: por defeito escolhe uma despesa já registada (já paga por ti)');
+  await page.click('.sheet .chip:text-is("Nova")');
   await page.fill('.sheet [aria-label="Valor a cobrar"]', '20');
   await page.fill('.sheet [aria-label="Descrição"]', 'Água Esmoriz');
   await G.auditar('cobrar despesa');
   await G.guardar();
   await G.toastTem('Cobrada a Ana');
-  check(await G.tem('Deve 20,00') && (await G.texto()).includes('Água Esmoriz'), 'água cobrada à Ana: deve 20 €');
-  await page.click('[aria-label="Pagou: Água Esmoriz (Ana)"]'); await page.waitForSelector('dialog.sheet[open]');
-  check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '20,00', '«Pagou» na água já vem com 20 €');
+  check(await G.tem('Deve 670,00'), 'água cobrada: Ana deve 670 €');
+  await page.click('button:has-text("Recebi uma transferência")'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.inputValue('.sheet [aria-label="Valor transferido"]')) === '670,00', 'transferência já sugere o que deve (670 €)');
+  await page.fill('.sheet [aria-label="Nota"]', 'renda + água');
+  await G.auditar('transferência');
   await G.guardar();
-  check(await G.tem('Tem tudo pago') && (await G.texto()).includes('Já pagou 670,00'), 'Ana pagou renda e água: tem tudo pago, 670 € no total');
+  check(await G.tem('Tem tudo pago') && (await G.texto()).includes('Transferência recebida'), 'depois da transferência: tem tudo pago, com o movimento na lista');
   check((await G.semEsp()).includes('+650,00€'), 'balanço do imóvel desde o início: 670 − 20 = +650,00 € (as obras de antes não contam)');
-  const rb = await bd("select tipo, mes_ref::text, despesa_id is not null d from recebimentos order by id");
-  const ag = (await bd("select inquilino_id is not null a, categoria from despesas where descricao = 'Água Esmoriz'"))[0];
-  check(rb.length === 2 && rb[0].tipo === 'renda' && rb[0].mes_ref === hoje.slice(0, 8) + '01' && rb[1].tipo === 'despesa' && rb[1].d && ag.a && ag.categoria === 'Casa Esmoriz', 'base de dados: renda do mês, água a cargo da Ana e o pagamento ligado a ela');
+  const rb = await bd("select tipo, valor from recebimentos");
+  const ag = (await bd("select inquilino_id is not null a, cobrada_em::text c from despesas where descricao = 'Água Esmoriz'"))[0];
+  check(rb.length === 1 && rb[0].tipo === 'outro' && rb[0].valor === 670 && ag.a && ag.c === hoje, 'base de dados: uma transferência de 670 € e a água cobrada hoje');
   await G.shot('06d-inquilinos');
   await G.auditar('inquilinos');
+  await page.click('button:has-text("Novo imóvel")'); await page.waitForSelector('dialog.sheet[open]');
+  check(await G.tem('Configurar imóvel'), '«Novo imóvel» abre a configuração de outro imóvel');
+  await page.keyboard.press('Escape'); await G.fechado();
 
   // ===== Em comum (Gonçalo) =====
   console.log('Em comum');
