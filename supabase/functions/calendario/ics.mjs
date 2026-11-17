@@ -82,6 +82,7 @@ export function construirICS(dados, opts) {
       p.transferencia ? 'De ' + (p.conta || 'conta principal') + ' para ' + p.para + '.' + (p.debito_direto ? ' Sai sozinho: confirma que há saldo.' : '')
         : p.debito_direto ? 'Sai sozinho' + (p.conta ? ' da conta ' + p.conta : '') + '. Confirma que há saldo.' : (p.conta ? 'Conta: ' + p.conta : null),
       p.variavel ? 'Valor estimado (média das últimas faturas).' : null,
+      p.comum ? 'Em comum' + (p.minha_parte != null ? ' · a tua parte: ' + eur(p.minha_parte) : '') + (p.paga ? ' · paga: ' + p.paga : '') : null,
       p.partilhada && p.parte_dela != null ? 'Parte ' + (nomeEla ? 'da ' + nomeEla : 'dela') + ': ' + eur(p.parte_dela) : null
     ].filter(Boolean).join('\n');
     if (desc) L.push('DESCRIPTION:' + esc(desc));

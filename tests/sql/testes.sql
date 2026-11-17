@@ -447,4 +447,79 @@ do $$ declare m bigint := current_setting('t.m4x')::bigint; c bigint := current_
 end $$;
 reset role;
 
+\echo '--- T18: conta em comum, visto de pago e acertos ---'
+reset role;
+insert into auth.users values ('55555555-5555-5555-5555-555555555555'), ('66666666-6666-6666-6666-666666666666'), ('77777777-7777-7777-7777-777777777777') on conflict do nothing;
+set role authenticated;
+set request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+select criar_casal('Gonçalo', 'Bia', 60) as casal5 \gset
+select gerar_convite() as cod5 \gset
+select id as m1 from casal_membros where ordem = 1 \gset
+select id as m2 from casal_membros where ordem = 2 \gset
+select set_config('t.casal', :'casal5', false) \gset
+select set_config('t.cod', :'cod5', false) \gset
+select set_config('t.m1', :'m1', false) \gset
+select set_config('t.m2', :'m2', false) \gset
+do $$ declare c bigint := current_setting('t.casal')::bigint; m1 bigint := current_setting('t.m1')::bigint; m2 bigint := current_setting('t.m2')::bigint; begin
+  begin perform criar_casal('X', 'Y', 50); raise exception 'T18 falhou: segundo casal';
+  exception when raise_exception then if sqlerrm not like 'Já tens%' then raise; end if; end;
+  insert into despesas (valor, descricao, casal_id, pago_por_membro, pct_m1) values (100, 'Supermercado comum', c, m1, 60);
+  insert into despesas (valor, descricao) values (20, 'Privada');
+  insert into despesas_recorrentes (nome, valor, dia_vencimento, categoria, casal_id, pago_por_membro, pct_m1, inicio)
+    values ('Renda', 600, 1, 'Casa', c, m1, 60, date_trunc('month', hoje_lisboa())::date);
+  perform gerar_recorrentes();
+  if (select pago from despesas where descricao = 'Renda') then raise exception 'T18 falhou: fixa devia entrar por pagar'; end if;
+  if (select pago_em from despesas where descricao = 'Supermercado comum') is null then raise exception 'T18 falhou: pago_em'; end if;
+  if (select saldo from casal_saldos where membro_id = m1) <> 40 or (select saldo from casal_saldos where membro_id = m2) <> -40 then
+    raise exception 'T18 falhou: saldo inicial (renda por pagar não conta)'; end if;
+  update despesas set pago = true where descricao = 'Renda';
+  if (select pago_em from despesas where descricao = 'Renda') <> hoje_lisboa() then raise exception 'T18 falhou: visto sem data'; end if;
+  if (select saldo from casal_saldos where membro_id = m1) <> 280 then raise exception 'T18 falhou: saldo depois da renda'; end if;
+  update despesas set pago = false where descricao = 'Renda';
+  if (select pago_em from despesas where descricao = 'Renda') is not null then raise exception 'T18 falhou: tirar o visto'; end if;
+  update despesas set pago = true where descricao = 'Renda';
+  perform definir_divisao(55, 'Beatriz');
+  if (select pct from casal_membros where id = m2) <> 45 or (select nome from casal_membros where id = m2) <> 'Beatriz' then raise exception 'T18 falhou: divisao'; end if;
+  perform definir_divisao(60, 'Bia');
+  raise notice 'casal antes da Bia entrar: OK';
+end $$;
+
+set request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  if (select count(*) from despesas) <> 0 or (select count(*) from casal_membros) <> 0 then raise exception 'T18 falhou: Bia ve antes de entrar'; end if;
+  begin perform aceitar_convite('ZZZZZZ'); raise exception 'T18 falhou: codigo falso aceite';
+  exception when raise_exception then if sqlerrm not like 'Código inválido%' then raise; end if; end;
+  perform aceitar_convite(lower(current_setting('t.cod')));
+end $$;
+do $$ declare c bigint := current_setting('t.casal')::bigint; m1 bigint := current_setting('t.m1')::bigint; m2 bigint := current_setting('t.m2')::bigint; begin
+  if (select count(*) from despesas) <> 2 then raise exception 'T18 falhou: Bia devia ver as 2 comuns (e não a privada): %', (select count(*) from despesas); end if;
+  if exists (select 1 from despesas where descricao = 'Privada') then raise exception 'T18 falhou: Bia ve a privada'; end if;
+  insert into despesas (valor, descricao, casal_id, pago_por_membro, pct_m1) values (50, 'Jantar pago pela Bia', c, m2, 60);
+  update despesas set categoria = 'Casa' where descricao = 'Supermercado comum';      -- edita uma do Gonçalo
+  if (select saldo from casal_saldos where membro_id = m1) <> 250 then raise exception 'T18 falhou: saldo com despesa da Bia (%)', (select saldo from casal_saldos where membro_id = m1); end if;
+  insert into acertos (casal_id, de_membro, para_membro, valor) values (c, m2, m1, 250);
+  if (select saldo from casal_saldos where membro_id = m1) <> 0 or (select saldo from casal_saldos where membro_id = m2) <> 0 then raise exception 'T18 falhou: acerto'; end if;
+  begin update despesas set casal_id = null where descricao = 'Supermercado comum';
+    if found then raise exception 'T18 falhou: Bia tornou privada uma despesa do Gonçalo'; end if;
+  exception when insufficient_privilege then null; end;
+  raise notice 'Bia dentro do casal: OK';
+end $$;
+
+set request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+insert into despesas_recorrentes (nome, valor, dia_vencimento, casal_id, pago_por_membro, pct_m1, inicio)
+  values ('Internet', 40, 28, :casal5, :m1, 60, date_trunc('month', hoje_lisboa())::date);
+set request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  if gerar_recorrentes() <> 1 then raise exception 'T18 falhou: Bia nao gerou a fixa comum'; end if;
+  if not exists (select 1 from proximos_pagamentos where nome = 'Internet') then raise exception 'T18 falhou: proximos da Bia'; end if;
+end $$;
+set request.jwt.claim.sub = '77777777-7777-7777-7777-777777777777';
+do $$ begin
+  begin perform aceitar_convite(current_setting('t.cod')); raise exception 'T18 falhou: codigo usado 2x';
+  exception when raise_exception then if sqlerrm not like 'Código inválido%' then raise; end if; end;
+  if (select count(*) from casal_saldos) <> 0 or (select count(*) from acertos) <> 0 then raise exception 'T18 falhou: estranho ve o casal'; end if;
+  raise notice 'conta em comum isolada: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

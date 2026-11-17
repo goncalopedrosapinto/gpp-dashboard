@@ -175,7 +175,7 @@ ol.steps li:last-child{margin:0}
 ol.steps b{font-weight:600}
 
 /* Barra de separadores */
-.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:var(--z-tabbar);display:grid;grid-template-columns:repeat(5,1fr);
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:var(--z-tabbar);display:grid;grid-template-columns:repeat(4,1fr);
   padding:6px 0 calc(env(safe-area-inset-bottom, 0px) + 4px);border-top:.5px solid var(--line);
   background:color-mix(in srgb,var(--card) 88%,transparent);
   -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px)}
@@ -213,6 +213,18 @@ dialog.alert{border:0;border-radius:14px;padding:20px 16px 14px;width:min(300px,
 .lfield{font-size:17px;padding:14px 16px;border-radius:12px;border:0;background:var(--card);color:var(--text)}
 .lfield[aria-invalid="true"]{box-shadow:0 0 0 2px var(--neg)}
 .lerr{color:var(--neg);font-size:15px;font-weight:600;margin:0}
+
+/* Visto de pago */
+.visto{flex:none;width:28px;height:28px;margin:-8px;padding:0;box-sizing:content-box;border:8px solid transparent;background-clip:padding-box;
+  border-radius:50%;box-shadow:inset 0 0 0 2px var(--muted);background-color:transparent;color:var(--on-accent);display:grid;place-items:center;transition:transform 100ms ease-out}
+.visto.on{background-color:var(--pos);box-shadow:none}
+.visto svg{width:18px;height:18px;stroke-width:2.6}
+.visto:active{transform:scale(0.92)}
+.rvals{text-align:right;flex:none}
+.rvals .rsub{margin-top:1px}
+.codigo{font-size:40px;font-weight:700;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:14px 0 2px}
+.pad0{margin:10px 0 0}
+.pad0 .btn{width:100%}
 
 /* PIN */
 .pin{max-width:340px;margin:0 auto;padding:calc(env(safe-area-inset-top, 0px) + 5vh) 24px calc(env(safe-area-inset-bottom, 0px) + 16px);display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px}

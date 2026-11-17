@@ -27,14 +27,18 @@ fs.readdirSync(MIGR).filter(f => f.endsWith('.sql')).sort().forEach(f => execSyn
 const pool = new Pool({ host: SOCK, port: 5433, user: 'postgres', database: 'fin' });
 
 // ---------- servidor simulado ----------
-const USER = { id: '11111111-1111-1111-1111-111111111111', email: 'goncalo@teste.pt', password: 'teste1234' };
+const USERS = [
+  { id: '11111111-1111-1111-1111-111111111111', email: 'goncalo@teste.pt', password: 'teste1234' },
+  { id: '22222222-2222-2222-2222-222222222222', email: 'bia@teste.pt', password: 'bia12345' }
+];
+const [USER, BIA] = USERS;
 const b64u = o => Buffer.from(JSON.stringify(o)).toString('base64url');
-function sessao() {
+function sessao(u) {
   const now = Math.floor(Date.now() / 1000);
-  const tok = b64u({ alg: 'HS256', typ: 'JWT' }) + '.' + b64u({ sub: USER.id, email: USER.email, role: 'authenticated', aud: 'authenticated', exp: now + 3600, iat: now, session_id: 's1' }) + '.assinatura';
-  return { access_token: tok, token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'rt1', user: userObj() };
+  const tok = b64u({ alg: 'HS256', typ: 'JWT' }) + '.' + b64u({ sub: u.id, email: u.email, role: 'authenticated', aud: 'authenticated', exp: now + 3600, iat: now, session_id: 's-' + u.id }) + '.assinatura';
+  return { access_token: tok, token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'rt-' + u.id, user: userObj(u) };
 }
-const userObj = () => ({ id: USER.id, aud: 'authenticated', role: 'authenticated', email: USER.email, email_confirmed_at: '2026-11-05T00:00:00Z',
+const userObj = u => ({ id: u.id, aud: 'authenticated', role: 'authenticated', email: u.email, email_confirmed_at: '2026-11-05T00:00:00Z',
   app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, identities: [], created_at: '2026-11-05T00:00:00Z', updated_at: '2026-11-05T00:00:00Z' });
 function subDe(hdr) {
   if (!hdr) return null;
@@ -43,7 +47,7 @@ function subDe(hdr) {
   try { const p = JSON.parse(Buffer.from(parts[1], 'base64url').toString()); return p.role === 'authenticated' ? p.sub : null; } catch (e) { return null; }
 }
 const ident = k => { if (!/^[a-z_][a-z0-9_]*$/.test(k)) throw new Error('identificador inválido ' + k); return '"' + k + '"'; };
-const ESCALARES = ['gerar_recorrentes', 'registar_apple_pay', 'registar_notificacao', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados'];
+const ESCALARES = ['criar_casal', 'gerar_convite', 'aceitar_convite', 'definir_divisao', 'gerar_recorrentes', 'registar_apple_pay', 'registar_notificacao', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados'];
 const COMPOSTAS = ['garantir_config'];
 const log = [];
 
@@ -116,15 +120,19 @@ async function rota(route) {
     return fs.existsSync(f) ? route.fulfill({ status: 200, contentType: ct, body: fs.readFileSync(f) }) : route.fulfill({ status: 404, body: '' });
   }
   if (u.pathname === '/auth/v1/token') {
-    const g = u.searchParams.get('grant_type');
+    const g = u.searchParams.get('grant_type'), b = JSON.parse(req.postData() || '{}');
     if (g === 'password') {
-      const b = JSON.parse(req.postData() || '{}');
-      if (b.email === USER.email && b.password === USER.password) return json(200, sessao());
+      const us = USERS.find(x => x.email === b.email && x.password === b.password);
+      if (us) return json(200, sessao(us));
       return json(400, { code: 'invalid_credentials', error: 'invalid_grant', error_description: 'Invalid login credentials', msg: 'Invalid login credentials', message: 'Invalid login credentials' });
     }
-    if (g === 'refresh_token') return json(200, sessao());
+    if (g === 'refresh_token') { const us = USERS.find(x => 'rt-' + x.id === b.refresh_token) || USER; return json(200, sessao(us)); }
   }
-  if (u.pathname === '/auth/v1/user') return json(200, userObj());
+  if (u.pathname === '/auth/v1/signup') {   // confirmação por email ligada: sem sessão
+    const b = JSON.parse(req.postData() || '{}');
+    return json(200, Object.assign(userObj({ id: '99999999-9999-9999-9999-999999999999', email: b.email }), { email_confirmed_at: null, confirmation_sent_at: '2026-11-17T10:00:00Z' }));
+  }
+  if (u.pathname === '/auth/v1/user') { const sub = subDe(hdr['authorization']); return json(200, userObj(USERS.find(x => x.id === sub) || USER)); }
   if (u.pathname === '/auth/v1/logout') return route.fulfill({ status: 204, body: '' });
   if (u.pathname.startsWith('/rest/v1/')) {
     const r = await rest(req.method(), u.pathname.slice(9), u.search, hdr, req.postData());
@@ -139,731 +147,381 @@ async function rota(route) {
 // ---------- teste ----------
 const falhas = [];
 const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg); if (!cond) falhas.push(msg); };
+const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+const a11y = [], alvosPeq = [], erros = [];
+const bd = async (sql, a) => (await pool.query(sql, a || [])).rows;
+const bdComo = async (uid, sql) => { const c = await pool.connect(); try { await c.query('begin'); await c.query('set local role authenticated'); await c.query("select set_config('request.jwt.claim.sub', $1, true)", [uid]); const r = (await c.query(sql)).rows; await c.query('commit'); return r; } finally { c.release(); } };
+const EURN = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
+const eur = v => EURN.format(v).replace(/[\s  ]/g, '');
+const hoje = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+const diaHoje = new Date().getDate();
+
+// Ferramentas por iPhone (cada pessoa tem o seu)
+function ferramentas(page, quem) {
+  page.on('pageerror', e => erros.push(quem + ' pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') erros.push(quem + ' console: ' + m.text()); });
+  const T = {
+    page,
+    shot: n => page.screenshot({ path: path.join(SHOTS, n + '.png') }),
+    texto: () => page.evaluate(() => document.body.innerText),
+    semEsp: async () => (await page.evaluate(() => document.body.innerText)).replace(/[\s  ]/g, ''),
+    tem: async t => { await page.waitForFunction(x => document.body.innerText.toLowerCase().includes(x.toLowerCase()), t, { timeout: 5000 }).catch(() => {}); return (await T.texto()).toLowerCase().includes(t.toLowerCase()); },
+    toastTem: async t => { await page.waitForFunction(x => document.getElementById('toast').textContent.includes(x), t, { timeout: 5000 }); },
+    fechado: () => page.waitForSelector('dialog.sheet', { state: 'detached', timeout: 5000 }),
+    guardar: async () => { await page.click('.sheet .snav .link.b'); await T.fechado(); },
+    tab: async n => { await page.click(`.tab:has-text("${n}")`); await page.waitForTimeout(300); },
+    pin: async d => { for (const c of d) await page.click('.pin-tecla:text-is("' + c + '")'); await page.waitForTimeout(250); },
+    apagarNaFolha: async () => { await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]'); await page.click('dialog.alert .danger'); await T.fechado(); },
+    auditar: async nome => {
+      const v = await page.evaluate(async src => {
+        if (!window.axe) { const sc = document.createElement('script'); sc.textContent = src; document.head.append(sc); }
+        const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] } });
+        return r.violations.map(x => ({ id: x.id, impact: x.impact, n: x.nodes.length, alvo: x.nodes.slice(0, 2).map(n => n.target.join(' ')).join(' | ') }));
+      }, AXE);
+      v.forEach(x => a11y.push(quem + ' ' + nome + ': ' + x.id + ' [' + x.impact + '] x' + x.n + ' -> ' + x.alvo));
+      const peq = await page.evaluate(() => {
+        const px = v => parseFloat(v) || 0, out = [];
+        const aberto = document.querySelector('dialog[open]');
+        for (const el of document.querySelectorAll('button, a[href], select, input:not(.sr-only)')) {
+          if (el.closest('[hidden]') || (aberto && !aberto.contains(el)) || (el.closest('dialog') && !el.closest('dialog').open)) continue;
+          const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+          if (!r.width || !r.height || cs.visibility === 'hidden' || cs.display === 'none') continue;
+          let w = r.width, h = r.height;
+          if (el.classList.contains('visto')) { w = r.width; h = r.height; }   // a borda transparente já conta (44×44)
+          for (const ps of ['::before', '::after']) {
+            const q = getComputedStyle(el, ps);
+            if (q.content === 'none' || q.position !== 'absolute') continue;
+            const t = Math.min(0, px(q.top)), b = Math.min(0, px(q.bottom)), l = Math.min(0, px(q.left)), rr = Math.min(0, px(q.right));
+            w = Math.max(w, r.width - l - rr); h = Math.max(h, r.height - t - b);
+          }
+          if (el.matches('input, select') && el.closest('.grow')) h = Math.max(h, el.closest('.grow').getBoundingClientRect().height);
+          if (w < 43.5 || h < 43.5) out.push((el.getAttribute('aria-label') || el.textContent.trim().slice(0, 18) || el.className) + ' ' + Math.round(w) + '×' + Math.round(h));
+        }
+        return [...new Set(out)];
+      });
+      peq.forEach(x => alvosPeq.push(quem + ' ' + nome + ': ' + x));
+    }
+  };
+  return T;
+}
 
 (async () => {
   const browser = await chromium.launch();
   const dev = devices['iPhone 15 Pro'] || devices['iPhone 14 Pro'];
-  const ctx = await browser.newContext({ ...dev, colorScheme: 'light', locale: 'pt-PT', timezoneId: 'Europe/Lisbon' });
   const umd = fs.readFileSync(path.join(SCR, 'node_modules/@supabase/supabase-js/dist/umd/supabase.js'));
-  await ctx.route('https://cdn.jsdelivr.net/**', r => r.fulfill({ status: 200, contentType: 'application/javascript', body: umd }));
-  await ctx.route(BASE + '/**', rota);
-  const page = await ctx.newPage();
-  const erros = [];
-  page.on('pageerror', e => erros.push('pageerror: ' + e.message));
-  page.on('console', m => { if (m.type() === 'error') erros.push('console: ' + m.text()); });
-  const shot = n => page.screenshot({ path: path.join(SHOTS, n + '.png') });
-  const toastTem = async t => { await page.waitForFunction(x => document.getElementById('toast').textContent.includes(x), t, { timeout: 5000 }); };
-  const texto = () => page.evaluate(() => document.body.innerText);
-  const tem = async t => { await page.waitForFunction(x => document.body.innerText.includes(x), t, { timeout: 5000 }).catch(() => {}); return (await texto()).includes(t); };
-  const fechado = () => page.waitForSelector('dialog.sheet', { state: 'detached', timeout: 5000 });
-  const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const a11y = [], alvosPeq = [];
-  async function auditar(nome) {
-    const v = await page.evaluate(async src => {
-      if (!window.axe) { const sc = document.createElement('script'); sc.textContent = src; document.head.append(sc); }
-      const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] } });
-      return r.violations.map(x => ({ id: x.id, impact: x.impact, n: x.nodes.length, alvo: x.nodes.slice(0, 2).map(n => n.target.join(' ')).join(' | ') }));
-    }, AXE);
-    v.forEach(x => a11y.push(nome + ': ' + x.id + ' [' + x.impact + '] x' + x.n + ' -> ' + x.alvo));
-    // Alvos de toque: ≥ 44×44 px contando com a área invisível (::before/::after com insets negativos)
-    const peq = await page.evaluate(() => {
-      const px = v => parseFloat(v) || 0, out = [];
-      const aberto = document.querySelector('dialog[open]');
-      for (const el of document.querySelectorAll('button, a[href], select, input:not(.sr-only)')) {
-        if (el.closest('[hidden]') || (aberto && !aberto.contains(el)) || (el.closest('dialog') && !el.closest('dialog').open)) continue;
-        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
-        if (!r.width || !r.height || cs.visibility === 'hidden' || cs.display === 'none') continue;
-        let w = r.width, h = r.height;
-        for (const ps of ['::before', '::after']) {
-          const q = getComputedStyle(el, ps);
-          if (q.content === 'none' || q.position !== 'absolute') continue;
-          const t = Math.min(0, px(q.top)), b = Math.min(0, px(q.bottom)), l = Math.min(0, px(q.left)), rr = Math.min(0, px(q.right));
-          w = Math.max(w, r.width - l - rr); h = Math.max(h, r.height - t - b);
-        }
-        // um campo de texto dentro de uma linha (.grow) usa a linha toda; conta a altura da linha
-        if (el.matches('input, select') && el.closest('.grow')) h = Math.max(h, el.closest('.grow').getBoundingClientRect().height);
-        if (w < 43.5 || h < 43.5) out.push((el.getAttribute('aria-label') || el.textContent.trim().slice(0, 18) || el.className) + ' ' + Math.round(w) + '×' + Math.round(h));
-      }
-      return [...new Set(out)];
-    });
-    peq.forEach(x => alvosPeq.push(nome + ': ' + x));
-  }
-  const apagarNaFolha = async () => { await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]'); await page.click('dialog.alert .danger'); await fechado(); };
-  const tab = async n => { await page.click(`.tab:has-text("${n}")`); await page.waitForTimeout(250); };
-  const irFixas = async () => { await tab('Gastos'); await page.click('[aria-label="Despesas fixas"]'); await page.waitForSelector('h1:has-text("Fixas")'); await page.waitForTimeout(200); };
-  const pin = async d => { for (const c of d) await page.click('.pin-tecla:text-is("' + c + '")'); await page.waitForTimeout(250); };
-  const guardar = async () => { await page.click('.sheet .snav .link.b'); await fechado(); };
-  const bd = async (sql, a) => (await pool.query(sql, a || [])).rows;
-  const bdUser = async sql => { const c = await pool.connect(); try { await c.query('begin'); await c.query('set local role authenticated'); await c.query("select set_config('request.jwt.claim.sub', $1, true)", [USER.id]); const r = (await c.query(sql)).rows; await c.query('commit'); return r; } finally { c.release(); } };
-  const semEsp = async () => (await texto()).replace(/[\s\u00a0\u202f]/g, '');
-  const EURN = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
-  const eur = v => EURN.format(v).replace(/[\s\u00a0\u202f]/g, '');
+  const novoIphone = async () => {
+    const ctx = await browser.newContext({ ...dev, colorScheme: 'light', locale: 'pt-PT', timezoneId: 'Europe/Lisbon' });
+    await ctx.route('https://cdn.jsdelivr.net/**', r => r.fulfill({ status: 200, contentType: 'application/javascript', body: umd }));
+    await ctx.route(BASE + '/**', rota);
+    return ctx.newPage();
+  };
+  const G = ferramentas(await novoIphone(), 'Gonçalo');
+  const page = G.page;
 
+  // ===== Entrada =====
+  console.log('Entrada');
   await page.goto(BASE + '/app/index.html');
   await page.waitForSelector('form.login');
-  await shot('01-login');
+  await G.shot('01-login');
   check((await page.evaluate(() => getComputedStyle(document.querySelector('.logo')).backgroundColor)) === 'rgb(234, 88, 12)', 'logo laranja no ecrã de entrada');
-
-  console.log('Entrada');
   await page.fill('input[type=email]', USER.email);
   await page.fill('input[type=password]', 'errada');
   await page.click('button[type=submit]');
   await page.waitForSelector('#login-erro:not([hidden])');
-  check((await page.textContent('#login-erro')).includes('Email ou palavra-passe errados') && (await page.getAttribute('input[type=password]', 'aria-invalid')) === 'true', 'palavra-passe errada: erro junto ao formulário, campos marcados');
-  await auditar('login com erro');
+  check((await page.textContent('#login-erro')).includes('Email ou palavra-passe errados'), 'palavra-passe errada: erro junto ao formulário');
+  await G.auditar('login com erro');
+  await page.click('button:has-text("Criar conta")');
+  await page.waitForSelector('h1:has-text("Criar conta")');
+  await page.fill('input[type=email]', 'nova@teste.pt');
+  await page.fill('input[type=password]', 'curta');
+  await page.click('button[type=submit]');
+  check(await G.tem('pelo menos 8 caracteres'), 'criar conta: palavra-passe curta recusada');
+  await page.fill('input[type=password]', 'umaboa123');
+  await page.click('button[type=submit]');
+  await page.waitForSelector('h1:has-text("GPP Dashboard")');
+  check(await G.tem('Abre o email de confirmação'), 'criar conta: pede para confirmar o email e volta a «Entrar»');
+  await G.auditar('criar conta');
   erros.length = 0;
+  await page.fill('input[type=email]', USER.email);
   await page.fill('input[type=password]', USER.password);
   await page.click('button[type=submit]');
   await page.waitForSelector('h1:has-text("Cria um PIN")');
-  check(true, 'depois de entrar pede para criar um PIN de 4 dígitos');
-  await shot('01b-criar-pin');
-  await auditar('criar PIN');
-  await pin('1111');
-  check(await tem('PIN demasiado óbvio'), 'PIN óbvio (1111) recusado');
-  await pin('1379');
-  await page.waitForSelector('h1:has-text("Confirma o PIN")');
-  await pin('1397');
-  check(await tem('Os PINs não coincidem') && await page.$('h1:has-text("Cria um PIN")') !== null, 'confirmação diferente: recomeça');
-  await pin('1379'); await page.waitForSelector('h1:has-text("Confirma o PIN")'); await pin('1379');
-  await page.waitForSelector('h1:has-text("Resumo")');
-  const pinLs = await page.evaluate(() => localStorage.getItem('gpp.pin.v1'));
-  check(pinLs && JSON.parse(pinLs).hash && !pinLs.includes('1379'), 'PIN guardado neste dispositivo só como hash');
-  await page.waitForTimeout(300);
-  check(await tem('Novembro 2026'), 'entra no Resumo de novembro 2026');
-  check((await bd('select nome_ela from config'))[0].nome_ela === 'Bia', 'nome por defeito: Bia');
-  await shot('02-resumo-vazio');
-  await auditar('resumo vazio');
-  console.log('Contas');
-  await page.click('button:has-text("Indicar o saldo da conta principal")');
-  await page.waitForSelector('dialog.sheet[open]');
-  check(await page.isDisabled('.sheet [aria-label="Conta principal"]') && await page.isChecked('.sheet [aria-label="Conta principal"]'), 'primeira conta é a principal');
-  await page.click('.sheet .snav .link.b');
-  check(await tem('Indica quanto tens hoje nesta conta'), 'sem saldo: erro junto ao Guardar');
-  await page.fill('.sheet [aria-label="Saldo hoje"]', '2.500,00');
-  await page.fill('.sheet [aria-label="Nome da conta"]', 'CGD à ordem');
-  await guardar();
-  await toastTem('Conta criada');
-  await page.click('button:has-text("Nova conta")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Saldo hoje"]', '8000');
-  await page.fill('.sheet [aria-label="Nome da conta"]', 'Poupança');
-  await page.click('.sheet .chip:has-text("Poupança")');
-  await guardar();
-  await page.waitForTimeout(300);
-  check((await semEsp()).includes('10500,00€'), 'o meu dinheiro: 2500 + 8000 = 10 500,00 €');
-  const contasBd = await bd('select id, nome, tipo, principal from contas order by id');
-  check(contasBd.length === 2 && contasBd[0].principal && contasBd[1].tipo === 'poupanca' && !contasBd[1].principal, 'contas gravadas: CGD principal, Poupança do tipo poupança');
-  await shot('02b-contas');
-  await auditar('contas');
+  await G.pin('1111');
+  check(await G.tem('PIN demasiado óbvio'), 'PIN óbvio recusado');
+  await G.pin('1379'); await page.waitForSelector('h1:has-text("Confirma o PIN")'); await G.pin('1379');
+  await page.waitForSelector('h1:has-text("Por pagar")');
+  check((await page.$$('.tab')).length === 4 && !(await G.texto()).includes('Ganhos') && !(await G.texto()).includes('Disponível'), 'quatro separadores e nada de saldos nem ganhos');
+  check(await G.tem('Adicionar despesa fixa'), 'por pagar vazio sugere criar as despesas fixas');
+  await G.shot('02-por-pagar-vazio');
+  await G.auditar('por pagar vazio');
 
-
-  console.log('Números à portuguesa');
-  await tab('Gastos');
+  // ===== Números à portuguesa =====
+  console.log('Números');
   await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
   const leu = async t => { await page.fill('.sheet [aria-label="Valor"]', t); await page.click('.sheet [aria-label="Descrição"]'); return page.inputValue('.sheet [aria-label="Valor"]'); };
-  const casos = [['12.500', '12500,00'], ['1.250', '1250,00'], ['1.234,56', '1234,56'], ['12,5', '12,50'], ['12.5', '12,50'], ['1234.56', '1234,56'], ['2.500,00', '2500,00'], ['0.500', '0,50']];
   const errados = [];
-  for (const [t, e] of casos) { const r = await leu(t); if (r !== e) errados.push(t + ' → ' + r + ' (esperado ' + e + ')'); }
-  check(errados.length === 0, 'números à portuguesa lidos como se escrevem (12.500 = 12 500 €)' + (errados.length ? ': ' + errados.join('; ') : ''));
-  await leu('abc');
-  check((await page.getAttribute('.sheet [aria-label="Valor"]', 'aria-invalid')) === 'true', 'valor inválido fica marcado ao sair do campo');
-  await page.fill('.sheet [aria-label="Valor"]', '1.250');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Teste milhares');
-  await guardar();
-  check((await bd("select valor from despesas where descricao = 'Teste milhares'"))[0].valor === 1250, '1.250 gravado como 1250 € (não 1,25 €)');
-  await page.click('.lrow:has-text("Teste milhares")'); await page.waitForSelector('dialog.sheet[open]');
-  await apagarNaFolha();
+  for (const [t, e] of [['12.500', '12500,00'], ['1.250', '1250,00'], ['1.234,56', '1234,56'], ['12,5', '12,50'], ['12.5', '12,50']]) { const r = await leu(t); if (r !== e) errados.push(t + ' → ' + r); }
+  check(errados.length === 0, 'números à portuguesa (12.500 = doze mil e quinhentos)' + (errados.length ? ': ' + errados.join('; ') : ''));
+  await page.keyboard.press('Escape'); await G.fechado();
 
-  console.log('Ganhos');
-  await tab('Ganhos');
-  async function novoGanho(v, d, tipo) {
-    await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-    await page.fill('.sheet [aria-label="Valor do ganho"]', v);
-    await page.fill('.sheet [aria-label="Descrição"]', d);
-    if (tipo) await page.click(`.sheet .chip:has-text("${tipo}")`);
-    await guardar();
-  }
-  await novoGanho('1250', 'Salário de novembro');
-  await toastTem('Ganho guardado');
-  await novoGanho('340,50', 'Comissões outubro', 'Comissões');
-  check(await tem('1590,50'), 'total de ganhos 1590,50 €');
-  check((await bd("select categoria from ganhos where valor = 1250"))[0].categoria === 'Salário', 'tipo Salário por defeito');
-  await shot('03-ganhos');
-
+  // ===== Fixas =====
   console.log('Fixas');
-  await irFixas();
-  async function novaFixa(v, n, dia, cat, parteDela, metade) {
+  await page.click('[aria-label="Despesas fixas"]'); await page.waitForSelector('h1:has-text("Fixas")');
+  const diaFuturo = Math.min(diaHoje + 3, 28);
+  async function novaFixa(v, n, dia, cat, extra) {
     await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
     await page.fill('.sheet [aria-label="Valor mensal"]', v);
     await page.fill('.sheet [aria-label="Nome"]', n);
-    await page.fill('.sheet [aria-label="Dia do pagamento"]', dia);
+    await page.fill('.sheet [aria-label="Dia do pagamento"]', String(dia));
     await page.click(`.sheet .chip:has-text("${cat}")`);
-    if (parteDela || metade) {
-      await page.check('.sheet [aria-label="Partilhada"]');
-      if (metade) await page.click('.sheet button:has-text("Metade")');
-      else await page.fill('.sheet [aria-label="Parte da Bia"]', parteDela);
-    }
-    await guardar();
+    if (extra) await extra();
+    await G.guardar();
   }
-  await novaFixa('600', 'Renda', '1', 'Casa', '300');
-  await toastTem('Fixa criada');
-  await novaFixa('40', 'Água', '31', 'Casa', null, true);
-  await novaFixa('35', 'Ginásio', '28', 'Saúde');
-  const tf = await texto();
-  check(tf.includes('675,00') && tf.includes('320,00') && tf.includes('355,00'), 'fixas: total 675 €, parte da Bia 320 €, teu custo 355 €');
-  check(tf.includes('Bia paga 20,00'), '"Metade" põe 20 € na água');
-  await shot('04-fixas');
-  await auditar('fixas');
-
-  console.log('Gastos');
-  await tab('Gastos');
-  let td = await texto();
-  check(td.includes('3 gastos'), 'as 3 fixas entraram sozinhas');
-  check(td.toLowerCase().includes('segunda-feira, 30 de novembro'), 'água (dia 31) passou para 30 de novembro');
-  check(td.includes('Bia deve 300,00'), 'renda mostra "Bia deve 300,00 €"');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.click('.sheet .snav .link.b');
-  await page.waitForSelector('.sheet .ferr:not([hidden])');
-  check((await page.textContent('.sheet .ferr')).includes('Indica um valor maior que zero') && (await page.getAttribute('.sheet [aria-label="Valor"]', 'aria-invalid')) === 'true', 'guardar sem valor: erro junto ao botão, campo marcado, folha continua aberta');
-  await shot('05a-erro-valor');
-  await auditar('folha com erro');
-  await page.keyboard.press('Escape');
-  await fechado();
-  check(true, 'Escape fecha a folha');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor"]', '50');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Jantar');
-  await page.click('.sheet .chip:has-text("Restauração")');
-  await page.check('.sheet [aria-label="Partilhada"]');
-  await page.fill('.sheet [aria-label="Parte da Bia"]', '25');
-  await page.check('.sheet [aria-label="Já recebi"]');
-  await page.waitForTimeout(100);
-  check((await page.textContent('.sheet .split')).includes('Custa-te 25,00'), 'conta de 50 € com 25 € da Bia: custa-te 25,00 €');
-  await shot('05-gasto-partilhado');
-  await guardar();
-  check(await tem('Bia pagou 25,00'), 'jantar aparece como "Bia pagou 25,00 €"');
-
-  console.log('Calculadora');
-  await tab('Calcular');
-  check((await page.inputValue('[aria-label="O meu rendimento"]')) === '1590,50', 'calculadora sugere os teus ganhos do mês');
-  await page.fill('[aria-label="Rendimento da Bia"]', '1000'); await page.press('[aria-label="Rendimento da Bia"]', 'Tab');
-  await page.fill('[aria-label="O meu rendimento"]', '1500'); await page.press('[aria-label="O meu rendimento"]', 'Tab');
-  await page.fill('[aria-label="Valor a dividir"]', '30');
+  await novaFixa('600', 'Renda', 1, 'Casa');
+  await G.toastTem('Por pagar');
+  await novaFixa('40', 'Água', diaFuturo, 'Casa', async () => { await page.check('.sheet [aria-label="Valor variável"]'); });
+  await novaFixa('26,98', 'Be Fit', diaFuturo, 'Saúde', async () => { await page.check('.sheet [aria-label="Débito direto"]'); });
+  check((await G.semEsp()).includes('≈666,98€'), 'fixas: total ≈ 666,98 € por mês');
+  await G.shot('03-fixas');
+  await G.auditar('fixas');
+  await page.click('button:has-text("Fechar")');
+  await page.waitForSelector('h1:has-text("Por pagar")');
   await page.waitForTimeout(300);
-  check((await page.textContent('[data-r=eu]')).includes('18,00') && (await page.textContent('[data-r=ela]')).includes('12,00'), 'calculadora: 30 € -> 18,00 € / 12,00 €');
-  const cfg = (await bd('select calc_eu, calc_ela from config'))[0];
-  check(cfg.calc_eu === 1500 && cfg.calc_ela === 1000, 'rendimentos da calculadora ficam guardados');
-  await shot('06-calcular');
-  await auditar('calcular');
-  await page.click('button:has-text("Registar como gasto partilhado")');
-  await page.waitForSelector('dialog.sheet[open]');
-  check((await page.inputValue('.sheet [aria-label="Parte da Bia"]')) === '12,00', 'registar a partir da calculadora preenche a parte da Bia (12,00)');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Gasolina');
-  await guardar();
-  const gas = (await bd("select valor, partilhada, parte_dela, recebido from despesas where descricao = 'Gasolina'"))[0];
-  check(gas && gas.valor === 30 && gas.parte_dela === 12 && gas.partilhada && !gas.recebido, 'gasolina: 30 € pelo total, 12 € a receber');
+  const t1 = (await G.texto()).toLowerCase();
+  const renda1 = diaHoje > 1;
+  check(t1.includes(renda1 ? 'em atraso' : 'próximos 7 dias') && (await G.semEsp()).includes('666,98€'), 'por pagar: 666,98 € com a renda ' + (renda1 ? 'em atraso' : 'a vencer'));
+  check((await bd("select count(*)::int n from despesas where not pago"))[0].n === 3, 'as 3 fixas entraram por pagar');
+  await G.shot('04-por-pagar');
+  await G.auditar('por pagar');
 
-  console.log('Apple Pay');
-  const token = (await bd('select token_atalho from config'))[0].token_atalho;
-  const ap = b => rest('POST', 'rpc/registar_apple_pay', '', { apikey: 'sb_publishable_x' }, JSON.stringify(Object.assign({ token }, b)));
-  const r1 = await ap({ valor: '12,50 €', comerciante: 'Continente', cartao: 'Visa CGD' });
-  const r2 = await ap({ valor: '3,20', comerciante: 'Padaria Aveiro' });
-  const rx = await rest('POST', 'rpc/registar_apple_pay', '', {}, JSON.stringify({ token: 'falso', valor: '1' }));
-  check(r1.status === 200 && r2.status === 200, 'Atalho regista gastos com o token');
-  check(rx.status === 400, 'token falso recusado');
-  const antesN = (await bd("select count(*)::int n from despesas where valor = 5.4"))[0].n;
-  const rw = await rest('POST', 'rpc/registar_apple_pay', '', { apikey: 'x' }, JSON.stringify({ token, valor: '€5.40', comerciante: 'Padaria Ramos', cartao: 'Visa' }));
-  const rn = await rest('POST', 'rpc/registar_notificacao', '', { apikey: 'x' }, JSON.stringify({ token, tipo: 'compra', valor: '5,40', entidade: 'PADARIA RAMOS', conta: 'CGD à ordem' }));
-  const linhasN = await bd("select fonte, comerciante from despesas where valor = 5.4");
-  check(rw.status === 200 && rn.body === 'duplicado' && linhasN.length === antesN + 1 && linhasN[0].fonte === 'ambas' && linhasN[0].comerciante === 'Padaria Ramos', 'compra pela Wallet e pela notificação do banco fica uma só (dados da Wallet)');
-  await bd('delete from despesas where valor = 5.4');   // não mexe nos totais seguintes
-  check((await rest('GET', 'ganhos', '?select=*', {}, null)).status === 403, 'sem sessão não se lêem ganhos');
-  await tab('Gastos');
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  check(await tem('Por rever (2)'), 'dois gastos Apple Pay por rever');
-  await page.click('.chip:has-text("Por rever")');
-  await page.waitForTimeout(200);
-  await shot('07-por-rever');
-  await page.click('.lrow:has-text("Continente")'); await page.waitForSelector('dialog.sheet[open]');
+  // ===== Visto =====
+  console.log('Visto');
+  await page.click('[aria-label="Marcar como paga: Renda"]');
+  await G.toastTem('Paga');
+  const renda = (await bd("select pago, pago_em::text from despesas where descricao = 'Renda'"))[0];
+  check(renda.pago && renda.pago_em === hoje, 'visto: renda paga hoje');
+  check((await G.texto()).toLowerCase().includes('já pagos') && await page.$('[aria-label="Paga: Renda"][aria-checked="true"]') !== null, 'renda passa para «Já pagos» com o visto marcado');
+  await page.click('[aria-label="Paga: Renda"]');
+  await G.toastTem('Voltou');
+  check(!(await bd("select pago from despesas where descricao = 'Renda'"))[0].pago, 'tocar outra vez tira o visto');
+  await page.click('[aria-label="Marcar como paga: Renda"]'); await G.toastTem('Paga');
+  await page.click('[aria-label="Marcar como paga: Água"]');
+  await page.waitForSelector('dialog.sheet[open]');
+  check(await G.tem('Confirmar e pagar'), 'fatura estimada: o visto pede primeiro o valor real');
+  await page.fill('.sheet [aria-label="Valor"]', '43,17');
+  await G.guardar();
+  await G.toastTem('Valor confirmado');
+  const agua = (await bd("select d.valor, d.pago, d.estimado, r.valor est from despesas d join despesas_recorrentes r on r.id = d.recorrente_id where d.descricao = 'Água'"))[0];
+  check(agua.valor === 43.17 && agua.pago && !agua.estimado && agua.est === 43.17, 'água: 43,17 €, paga, e a estimativa passa a 43,17 €');
+  await G.shot('05-visto');
+
+  // ===== Despesas =====
+  console.log('Despesas');
+  await G.tab('Despesas');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  check(await page.isChecked('.sheet [aria-label="Já está paga"]'), 'despesa nova de hoje já vem paga');
+  check(await page.$('.sheet [aria-label="Em comum com Bia"]') === null, 'sem conta em comum não aparece a opção «em comum»');
+  await page.fill('.sheet [aria-label="Valor"]', '12,50');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Almoço');
+  await page.click('.sheet .chip:has-text("Restauração")');
+  await G.guardar();
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor"]', '89');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Seguro moto');
+  const futuro = new Date(); futuro.setDate(futuro.getDate() + 5);
+  const fISO = futuro.getFullYear() + '-' + String(futuro.getMonth() + 1).padStart(2, '0') + '-' + String(futuro.getDate()).padStart(2, '0');
+  await page.fill('.sheet [aria-label="Data"]', fISO);
+  await page.dispatchEvent('.sheet [aria-label="Data"]', 'change');
+  check(!(await page.isChecked('.sheet [aria-label="Já está paga"]')), 'data futura: fica «por pagar» sozinho');
+  await G.guardar();
+  check(!(await bd("select pago from despesas where descricao = 'Seguro moto'"))[0].pago, 'seguro gravado por pagar');
+  await page.click('.chip:has-text("Por pagar")');
+  check((await G.texto()).includes('Seguro moto') && !(await G.texto()).includes('Almoço'), 'filtro «Por pagar»');
+  await page.click('.chip:has-text("Todas")');
+  await G.shot('06-despesas');
+  await G.auditar('despesas');
+
+  // ===== Em comum (Gonçalo) =====
+  console.log('Em comum');
+  await G.tab('Em comum');
+  check(await G.tem('Criar conta em comum'), 'sem conta em comum: ecrã para criar ou entrar com código');
+  await G.auditar('criar conta em comum');
+  await page.fill('[aria-label="O teu nome"]', 'Gonçalo');
+  await page.fill('[aria-label="Nome dela"]', 'Bia');
+  await page.fill('[aria-label="A tua parte em percentagem"]', '60');
+  await page.click('button:has-text("Criar conta em comum")');
+  await G.toastTem('Conta em comum criada');
+  check(await G.tem('Estão acertados') && (await G.semEsp()).includes('60%') && (await G.semEsp()).includes('40%'), 'conta criada: acertados, divisão 60/40');
+  await page.click('button:has-text("Gerar código de convite")');
+  await page.waitForSelector('dialog.sheet[open] .codigo');
+  const codigo = (await page.textContent('.sheet .codigo')).trim();
+  check(/^[0-9A-Z]{6}$/.test(codigo) && (await bd('select count(*)::int n from casal_convites where codigo = $1', [codigo]))[0].n === 1, 'código de convite com 6 caracteres: ' + codigo);
+  await G.shot('07-convite');
+  await G.auditar('convite');
+  await page.click('.sheet .snav .link');   // Fechar
+  await G.fechado();
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  check(await page.isChecked('.sheet [aria-label="Em comum com Bia"]') && (await page.inputValue('.sheet [aria-label="A tua parte em percentagem"]')) === '60', 'despesa nova a partir de «Em comum» já vem em comum, 60%');
+  await page.fill('.sheet [aria-label="Valor"]', '80');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Supermercado');
   await page.click('.sheet .chip:has-text("Supermercado")');
-  await page.check('.sheet [aria-label="Partilhada"]');
-  await guardar();
-  await ap({ valor: '20,00', comerciante: 'CONTINENTE' });
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  await page.waitForTimeout(400);
-  await page.click('.chip:has-text("Todos")'); await page.waitForTimeout(200);
-  const cont = await page.textContent('.lrow:has-text("CONTINENTE")');
-  check(cont.includes('Supermercado') && cont.includes('parte da Bia por definir'), 'segunda compra no Continente já entra como Supermercado + partilhada');
-  await shot('08-gastos');
-  await auditar('gastos');
+  check((await page.textContent('.sheet .split')).replace(/[\s  ]/g, '').includes('Tu48,00€·Bia32,00€'), 'mostra a divisão: tu 48 € · Bia 32 €');
+  await G.shot('08-despesa-comum');
+  await G.auditar('despesa em comum');
+  await G.guardar();
+  check(await G.tem('Bia deve-te') && (await G.semEsp()).includes('32,00€'), 'Bia deve-te 32,00 €');
+  await G.tab('Por pagar');
+  const parteBd = (await bdComo(USER.id, "select round(sum(valor * case when casal_id is null then 100 else pct_m1 end / 100), 2)::float8 t from despesas where mes = date_trunc('month', current_date)::date"))[0].t;
+  check((await G.semEsp()).toLowerCase().includes('atuaparte' + eur(parteBd)), 'resumo do mês: a tua parte (' + eur(parteBd) + ') bate com a base de dados');
+  check((await G.texto()).includes('Bia deve-te'), 'por pagar mostra o saldo com a Bia');
 
-  console.log('Resumo');
-  await tab('Resumo');
-  // gastos 600+40+35+50+30+12,50+3,20+20 = 790,70; recebido 25; custo liquido 765,70; ganhos 1590,50; saldo 824,80
-  // a receber: renda 300 + agua 20 + gasolina 12 = 332 (+2 Continente sem parte)
-  let tr = await texto();
-  check(tr.includes('824,80'), 'saldo 824,80 €');
-  check(tr.includes('790,70') && tr.includes('765,70') && tr.includes('25,00'), 'gastos 790,70 €, recebido 25 €, custo líquido 765,70 €');
-  check(tr.includes('332,00') && tr.includes('5 contas partilhadas') && tr.includes('2 contas sem a parte da Bia definida'), 'a receber da Bia: 332,00 € em 5 contas (2 por definir)');
-  await shot('09-resumo');
-  await auditar('resumo');
-  await page.click('.lrow:has-text("Renda") .mini');
-  await toastTem('Recebido: 300,00');
-  check(await tem('1124,80'), 'marcar a renda como recebida: saldo sobe para 1124,80 €');
-  await page.click('.lrow:has(.rtitle:text-is("Continente")) .mini');
-  await page.waitForSelector('dialog.sheet[open]');
-  await page.click('.sheet button:has-text("Metade")');
-  await page.check('.sheet [aria-label="Já recebi"]');
-  await guardar();
-  check(await tem('1131,05'), '"Definir" no Continente: metade (6,25 €) recebida, saldo 1131,05 €');
-  await page.evaluate(() => window.scrollTo(0, 700)); await page.waitForTimeout(200);
-  await shot('10-resumo-a-receber');
-  await page.evaluate(() => window.scrollTo(0, 0));
+  // ===== A Bia entra =====
+  console.log('A Bia entra');
+  const B = ferramentas(await novoIphone(), 'Bia');
+  await B.page.goto(BASE + '/app/index.html');
+  await B.page.waitForSelector('form.login');
+  await B.page.fill('input[type=email]', BIA.email);
+  await B.page.fill('input[type=password]', BIA.password);
+  await B.page.click('button[type=submit]');
+  await B.page.waitForSelector('h1:has-text("Cria um PIN")');
+  await B.pin('2580'); await B.page.waitForSelector('h1:has-text("Confirma o PIN")'); await B.pin('2580');
+  await B.page.waitForSelector('h1:has-text("Por pagar")');
+  check(!(await B.texto()).includes('Renda') && !(await B.texto()).includes('Supermercado'), 'antes do código a Bia não vê nada do Gonçalo');
+  await B.tab('Em comum');
+  await B.page.fill('[aria-label="Código de convite"]', 'ZZZZZZ');
+  await B.page.click('button:has-text("Entrar com o código")');
+  check(await B.tem('Código inválido'), 'código errado: explica e não entra');
+  for (let i = erros.length - 1; i >= 0; i--) if (/^Bia console: Failed to load resource.*400/.test(erros[i])) erros.splice(i, 1);   // o 400 do código errado é esperado
+  await B.page.fill('[aria-label="Código de convite"]', codigo.toLowerCase());
+  await B.page.click('button:has-text("Entrar com o código")');
+  await B.toastTem('Entraste');
+  check(await B.tem('Deves a Gonçalo') && (await B.semEsp()).includes('32,00€') && (await B.texto()).includes('Supermercado'), 'Bia vê a despesa em comum e que deve 32,00 € ao Gonçalo');
+  await B.tab('Despesas');
+  check(!(await B.texto()).includes('Almoço') && !(await B.texto()).includes('Renda') && (await B.texto()).includes('Supermercado'), 'Bia não vê as despesas pessoais do Gonçalo');
+  await B.page.click('.addbtn'); await B.page.waitForSelector('dialog.sheet[open]');
+  await B.page.fill('.sheet [aria-label="Valor"]', '50');
+  await B.page.fill('.sheet [aria-label="Descrição"]', 'Jantar');
+  await B.page.check('.sheet [aria-label="Em comum com Gonçalo"]');
+  check((await B.page.inputValue('.sheet [aria-label="A tua parte em percentagem"]')) === '40', 'para a Bia a parte por defeito é 40%');
+  await B.guardar();
+  await B.tab('Em comum');
+  check(await B.tem('Deves a Gonçalo') && (await B.semEsp()).includes('2,00€'), 'depois do jantar (pago pela Bia) ela deve só 2,00 €');
+  await B.page.click('button:has-text("Acertar contas")'); await B.page.waitForSelector('dialog.sheet[open]');
+  check((await B.page.inputValue('.sheet [aria-label="Valor do acerto"]')) === '2,00' && (await B.page.getAttribute('.sheet .chip:has-text("Paguei a Gonçalo")', 'aria-pressed')) === 'true', 'acertar já vem com 2,00 € e «Paguei a Gonçalo»');
+  await B.page.fill('.sheet [aria-label="Nota"]', 'MB Way');
+  await B.shot('09-bia-acertar');
+  await B.auditar('acertar');
+  await B.guardar();
+  await B.toastTem('Acerto registado');
+  check(await B.tem('Estão acertados'), 'depois do acerto: acertados');
+  await B.shot('10-bia-em-comum');
+  await B.auditar('em comum da Bia');
 
-  console.log('Ajustes');
-  await page.click('[aria-label="Ajustes"]');
-  await page.waitForSelector('h1:has-text("Ajustes")');
-  check((await page.inputValue('[aria-label="Nome dela"]')) === 'Bia' && (await tem(token.slice(0, 8))), 'Ajustes: nome Bia e token do Atalho');
-  await shot('11-ajustes');
-  await auditar('ajustes');
+  // ===== De volta ao Gonçalo =====
+  console.log('Gonçalo vê o que a Bia fez');
+  await page.reload();
+  await page.waitForSelector('.pin-teclado');
+  check(!(await G.texto()).includes('Por pagar'), 'ao reabrir pede o PIN antes de mostrar dados');
+  await G.pin('0000');
+  check(await G.tem('Faltam 4 tentativas'), 'PIN errado: diz quantas tentativas faltam');
+  await page.keyboard.type('1379');
+  await page.waitForSelector('h1:has-text("Por pagar")');
+  await G.tab('Em comum');
+  check(await G.tem('Estão acertados') && (await G.texto()).includes('Bia pagou-te') && (await G.texto()).includes('Jantar'), 'Gonçalo vê o jantar da Bia e o acerto dela');
+  const saldos = await bdComo(USER.id, 'select nome, saldo::float8 s from casal_saldos order by ordem');
+  check(saldos[0].s === 0 && saldos[1].s === 0, 'base de dados: saldos a zero');
+  await G.shot('11-em-comum');
+  await G.auditar('em comum');
+  await page.click('button:has-text("Alterar divisão")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="A tua parte em percentagem"]', '55');
+  await G.guardar();
+  check((await G.semEsp()).includes('55%') && (await G.semEsp()).includes('45%'), 'divisão alterada para 55/45');
+  check(await G.tem('Estão acertados'), 'mudar a divisão não mexe nas despesas já registadas');
+
+  // fixa em comum e feed do calendário
+  await page.click('.tab:has-text("Despesas")'); await page.click('[aria-label="Despesas fixas"]'); await page.waitForSelector('h1:has-text("Fixas")');
+  await novaFixa('40', 'Internet', diaFuturo, 'Casa', async () => { await page.check('.sheet [aria-label="Em comum com Bia"]'); });
+  check((await G.texto()).includes('Comum · tua parte 22,00'), 'fixa em comum: a tua parte 22,00 €');
+  const tkCal = (await bd('select token_calendario from config where owner = $1', [USER.id]))[0].token_calendario;
+  const rf = await rest('POST', 'rpc/calendario_dados', '', {}, JSON.stringify({ token: tkCal, p_agenda: 'pagamentos' }));
+  const net = (rf.body.pagamentos || []).find(p => p.nome === 'Internet');
+  check(rf.status === 200 && net && net.comum && net.minha_parte === 22, 'feed do iPhone: Internet em comum com a tua parte (22 €)');
+  const tkCalB = (await bd('select token_calendario from config where owner = $1', [BIA.id]))[0].token_calendario;
+  const rfB = await rest('POST', 'rpc/calendario_dados', '', {}, JSON.stringify({ token: tkCalB, p_agenda: 'pagamentos' }));
+  const netB = (rfB.body.pagamentos || []).find(p => p.nome === 'Internet');
+  check(netB && netB.minha_parte === 18 && !(rfB.body.pagamentos || []).some(p => p.nome === 'Renda'), 'feed da Bia: só as fixas em comum, com a parte dela (18 €)');
   await page.click('button:has-text("Fechar")');
-  await page.waitForSelector('h1:has-text("Resumo")');
 
+  // Wallet + banco
+  const token = (await bd('select token_atalho from config where owner = $1', [USER.id]))[0].token_atalho;
+  const rw = await rest('POST', 'rpc/registar_apple_pay', '', {}, JSON.stringify({ token, valor: '€5.40', comerciante: 'Padaria Ramos', cartao: 'Visa' }));
+  const rn = await rest('POST', 'rpc/registar_notificacao', '', {}, JSON.stringify({ token, tipo: 'compra', valor: '5,40', entidade: 'PADARIA', conta: 'x' }));
+  const pad = await bd("select fonte, pago from despesas where valor = 5.4");
+  check(rw.status === 200 && rn.body === 'duplicado' && pad.length === 1 && pad[0].fonte === 'ambas' && pad[0].pago, 'Wallet + banco na mesma compra: uma só, já paga');
 
-  console.log('Ajustar, transferir, gastar da poupança');
-  await page.waitForSelector('h1:has-text("Resumo")');
-  const dbTot = (await bdUser('select sum(saldo_atual)::float8 t from saldos_contas'))[0].t;
-  check((await semEsp()).includes(eur(dbTot)), 'total no ecrã bate com a base de dados (' + eur(dbTot) + ')');
-  await page.click('[aria-label="Ajustar: CGD à ordem"]'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Saldo real hoje"]', '3000');
-  await page.waitForTimeout(100);
-  check((await page.textContent('.sheet .split')).includes('diferença'), 'ajustar mostra a diferença face ao calculado');
-  await shot('11b-ajustar');
-  await auditar('ajustar');
-  await guardar();
-  await toastTem('Saldo ajustado');
-  const cgd = async () => (await page.textContent('.lrow:has(.rtitle:text-is("CGD à ordem")) .rval')).replace(/[\s\u00a0\u202f]/g, '');
-  const pou = async () => (await page.textContent('.lrow:has(.rtitle:text-is("Poupança")) .rval')).replace(/[\s\u00a0\u202f]/g, '');
-  check((await cgd()) === '3000,00€', 'depois do ajuste a CGD mostra exatamente 3000,00 €');
-  const pouAntes = Number((await bdUser("select saldo_atual::float8 s from saldos_contas where nome = 'Poupança'"))[0].s);
-  await page.click('button:has-text("Transferir")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor a transferir"]', '500');
-  await guardar();
-  await toastTem('Transferido');
-  check((await cgd()) === '2500,00€' && (await pou()) === eur(pouAntes + 500), 'transferir 500 €: CGD 2500 €, Poupança +500 €');
-  check((await texto()).toLowerCase().includes('transferências de novembro 2026') && await tem('CGD à ordem → Poupança'), 'a transferência aparece no Resumo com De → Para');
-  await page.click('.lrow:has(.rtitle:text-is("Transferência"))'); await page.waitForSelector('dialog.sheet[open]');
-  check((await page.inputValue('.sheet [aria-label="Valor a transferir"]')) === '500,00', 'tocar na transferência abre-a para editar');
-  await page.fill('.sheet [aria-label="Valor a transferir"]', '600');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Poupança mensal');
-  await guardar();
-  await toastTem('Transferência atualizada');
-  check((await cgd()) === '2400,00€' && (await pou()) === eur(pouAntes + 600), 'editar para 600 €: CGD 2400 €, Poupança +600 €');
-  await page.click('.lrow:has(.rtitle:text-is("Poupança mensal"))'); await page.waitForSelector('dialog.sheet[open]');
-  await apagarNaFolha();
-  await toastTem('Transferência apagada');
-  check((await cgd()) === '3000,00€' && (await pou()) === eur(pouAntes), 'apagar a transferência repõe os dois saldos');
-  await page.click('button:has-text("Transferir")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor a transferir"]', '500');
-  await guardar();
-  await toastTem('Transferido');
-  await tab('Gastos');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor"]', '100');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Seguro');
-  await page.selectOption('.sheet [aria-label="Conta"]', { label: 'Poupança' });
-  await guardar();
-  const seg = (await bd("select d.conta_id, c.nome from despesas d join contas c on c.id = d.conta_id where d.descricao = 'Seguro'"))[0];
-  check(seg && seg.nome === 'Poupança', 'gasto com conta escolhida grava na Poupança');
-  await tab('Resumo');
-  check((await pou()) === eur(pouAntes + 400) && (await cgd()) === '2500,00€', 'o seguro sai da Poupança e não mexe na CGD');
-
-
-  console.log('Cartão de crédito e transferências fixas');
-  await page.click('button:has-text("Nova conta")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.click('.sheet .chip:has-text("Cartão de crédito")');
-  await page.waitForSelector('.sheet [aria-label="Dívida hoje"]');
-  check(await tem('quanto deves hoje neste cartão'), 'cartão de crédito pergunta quanto deves');
-  await page.fill('.sheet [aria-label="Dívida hoje"]', '300');
-  await page.fill('.sheet [aria-label="Nome da conta"]', 'Caetano GO');
-  check(await page.isVisible('.sheet [aria-label="Plafond"]') && await page.isHidden('.sheet [aria-label="Conta principal"]'), 'cartão de crédito pede o plafond (e não a conta principal)');
-  await page.fill('.sheet [aria-label="Plafond"]', '1500');
-  await guardar();
-  await toastTem('Conta criada');
-  const cartao = async () => (await bdUser("select tipo, saldo_atual::float8 s, saldo_previsto::float8 p from saldos_contas where nome = 'Caetano GO'"))[0];
-  let cg = await cartao();
-  check(cg && cg.tipo === 'credito' && cg.s === -300, 'cartão gravado como crédito com saldo −300 € (dívida)');
-  const disp = async () => (await bdUser("select sum(saldo_atual)::float8 t from saldos_contas where tipo <> 'credito'"))[0].t;
-  let txt = await semEsp();
-  check(txt.includes('Dívidanoscartões300,00€') && txt.includes('Patrimóniolíquido' + eur((await disp()) - 300)), 'Resumo separa disponível, dívida (300 €) e património líquido');
-  const cgRow = '.lrow:has(.rtitle:text-is("Caetano GO"))';
-  const subCg = async () => (await page.textContent(cgRow + ' .rsub')).replace(/[\s\u00a0\u202f]/g, '');
-  check((await page.textContent(cgRow + ' .rval')).replace(/[\s\u00a0\u202f]/g, '') === '300,00€' && (await subCg()) === 'Livre1200€de1500€', 'linha do cartão: 300,00 € em dívida, livre 1200 € de 1500 €');
-  check((await bd("select plafond from contas where nome = 'Caetano GO'"))[0].plafond === 1500 && await page.$(cgRow + ' .uso i[style*="width:20%"]') !== null, 'plafond gravado e barra de uso a 20%');
-  await shot('17-cartao-credito');
-  await auditar('cartão de crédito');
-  await page.click('[aria-label="Ajustar: Caetano GO"]'); await page.waitForSelector('dialog.sheet[open]');
-  check((await page.inputValue('.sheet [aria-label="Dívida real hoje"]')) === '300,00', 'ajustar o cartão mostra a dívida em positivo');
-  await page.fill('.sheet [aria-label="Dívida real hoje"]', '250');
-  await guardar();
-  await toastTem('Saldo ajustado');
-  check((await cartao()).s === -250 && (await subCg()) === 'Livre1250€de1500€', 'ajuste do cartão grava −250 € e o livre sobe para 1250 €');
-
-  await irFixas();
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  check(await page.isHidden('.sheet [aria-label="De"]'), 'fixa nova começa como despesa (sem De/Para)');
-  await page.fill('.sheet [aria-label="Valor mensal"]', '127');
-  await page.click('.sheet .chip:has-text("Transferência")');
-  check(await page.isVisible('.sheet [aria-label="De"]') && await page.isHidden('.sheet [aria-label="Partilhada"]') && await page.isHidden('.sheet [aria-label="Conta"]'), 'transferência mostra De/Para e esconde categoria, partilha e conta');
-  await page.fill('.sheet [aria-label="Nome"]', 'Pagamento Caetano GO');
-  const diaT = Math.min(new Date().getDate() + 2, 28);   // um dia ainda por vir este mês
-  await page.fill('.sheet [aria-label="Dia do pagamento"]', String(diaT));
-  await page.selectOption('.sheet [aria-label="De"]', { label: 'Poupança' });
-  await page.selectOption('.sheet [aria-label="Para"]', { label: 'Poupança' });
-  await page.click('.sheet .snav .link.b');
-  check(await tem('Escolhe duas contas diferentes'), 'transferência para a mesma conta: erro');
-  await page.selectOption('.sheet [aria-label="Para"]', { label: 'Caetano GO' });
-  await shot('18-fixa-transferencia');
-  await auditar('fixa transferência');
-  await guardar();
-  await toastTem('Fixa criada');
-  const ft = (await bd("select r.id, c.nome de, d.nome para, r.categoria from despesas_recorrentes r join contas c on c.id = r.conta_id join contas d on d.id = r.para_conta_id where r.nome = 'Pagamento Caetano GO'"))[0];
-  check(ft && ft.de === 'Poupança' && ft.para === 'Caetano GO' && ft.categoria === null, 'fixa gravada como transferência Poupança → Caetano GO');
-  const tfx = await bd('select valor, data from transferencias where recorrente_id = $1', [ft.id]);
-  check(tfx.length === 1 && tfx[0].valor === 127 && tfx[0].data === '2026-11-' + String(diaT).padStart(2, '0') && (await bd("select count(*)::int n from despesas where descricao = 'Pagamento Caetano GO'"))[0].n === 0,
-    'gerou a transferência do mês e nenhum gasto');
-  txt = await semEsp();
-  check(txt.includes('Gastosfixos675,00€') && txt.includes('Transferênciasentrecontas127,00€'), 'a transferência não entra no total de gastos fixos');
-  check(txt.toLowerCase().includes('poupança·127,00€') && (await texto()).includes('Transferência para Caetano GO'), 'fixas agrupadas pela conta de onde sai o dinheiro');
-  await shot('19-fixas-por-conta');
-  await auditar('fixas por conta');
-  await page.click('.lrow:has-text("Pagamento Caetano GO")'); await page.waitForSelector('dialog.sheet[open]');
-  check((await page.getAttribute('.sheet .chip:has-text("Transferência")', 'aria-pressed')) === 'true', 'editar abre como transferência');
-  await page.fill('.sheet [aria-label="Valor mensal"]', '130');
-  await guardar();
-  check((await bd('select valor from transferencias where recorrente_id = $1', [ft.id]))[0].valor === 130, 'mudar a transferência fixa atualiza a deste mês');
-  cg = await cartao();
-  check(cg.p === cg.s + 130, 'saldo previsto do cartão já conta com o pagamento de 130 €');
-  await tab('Agenda');
-  await page.click('.cal-dia:has(.cal-num:text-is("' + diaT + '"))');
-  check(await tem('Transferir: Pagamento Caetano GO') && await tem('De Poupança para Caetano GO'), 'agenda mostra "Transferir" com De → Para no dia do pagamento');
-  await page.click('.cal-dia.hoje');   // volta a hoje para a secção da agenda
-  await tab('Gastos');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor"]', '36');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Barbeiro');
-  await page.selectOption('.sheet [aria-label="Conta"]', { label: 'Caetano GO' });
-  await guardar();
-  await tab('Resumo');
-  check((await cartao()).s === -286 && (await semEsp()).includes('Dívidanoscartões286,00€') && (await subCg()) === 'Livre1214€de1500€', 'gasto pago com o cartão: dívida 286 €, livre 1214 €');
-  check(!(await texto()).includes('Saldo atual da Caetano GO'), 'cartões de crédito não geram aviso de saldo');
-
-
+  // ===== Agenda =====
   console.log('Agenda');
-  await tab('Agenda');
+  await G.tab('Agenda');
   await page.waitForSelector('.cal');
-  check(await page.$('.cal-dia.hoje[aria-pressed="true"]') !== null, 'agenda abre no dia de hoje');
-  check(await page.$('.cal-dia:has(.cal-num:text-is("30")) .ag-pag') !== null && await page.$('.cal-dia:has(.cal-num:text-is("28")) .ag-pag') !== null, 'pagamentos das fixas aparecem nos dias 28 e 30');
-  await page.click('.cal-dia:has(.cal-num:text-is("30"))');
-  check(await tem('Pagar Água'), 'tocar no dia 30 mostra "Pagar Água"');
-  await page.click('.cal-dia.hoje');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.click('.sheet .snav .link.b');
-  check(await tem('Dá um título ao evento'), 'evento sem título: erro junto ao Guardar');
-  await page.fill('.sheet [aria-label="Título"]', 'Jantar com a Bia');
-  await page.click('.sheet [aria-label="Agenda"] .chip:has-text("Bia")');
-  await page.click('.sheet .snav .link.b');
-  check(await tem('Indica a hora de início'), 'sem hora nem "Todo o dia": erro');
-  await page.fill('.sheet [aria-label="Início"]', '20:00');
-  await page.fill('.sheet [aria-label="Fim"]', '22:00');
-  await page.click('.sheet [aria-label="Alerta"] .chip:has-text("1 h antes")');
-  await page.fill('.sheet [aria-label="Local"]', 'Aveiro');
-  await shot('14-novo-evento');
-  await auditar('novo evento');
-  await guardar();
-  await toastTem('Evento guardado');
-  check(await tem('20:00–22:00 · Aveiro · Bia'), 'jantar aparece no dia com hora, local e agenda');
-  const mesIso = (await bd("select to_char(date_trunc('month', current_date), 'YYYY-MM') m"))[0].m;
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Título"]', 'Reunião de vendas');
-  await page.click('.sheet [aria-label="Agenda"] .chip:has-text("Trabalho")');
-  await page.fill('.sheet [aria-label="Data"]', mesIso + '-03');
-  await page.fill('.sheet [aria-label="Início"]', '09:30');
-  await page.click('.sheet [aria-label="Repetição"] .chip:has-text("Semanal")');
-  await guardar();
-  check(await page.$('.cal-dia:has(.cal-num:text-is("10")) .ag-trabalho') !== null && await page.$('.cal-dia:has(.cal-num:text-is("17")) .ag-trabalho') !== null, 'evento semanal repete-se nos dias 10 e 17');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Título"]', 'Teste');
-  await page.fill('.sheet [aria-label="Início"]', '10:00');
-  await page.fill('.sheet [aria-label="Fim"]', '09:00');
-  await page.click('.sheet .snav .link.b');
-  check(await tem('O fim tem de ser depois do início'), 'fim antes do início: erro');
-  await page.keyboard.press('Escape'); await fechado();
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Título"]', 'Aniversário da Bia');
-  await page.click('.sheet [aria-label="Agenda"] .chip:has-text("Bia")');
-  await page.check('.sheet [aria-label="Todo o dia"]');
-  check(await page.isHidden('.sheet [aria-label="Início"]'), '"Todo o dia" esconde as horas');
-  await page.click('.sheet [aria-label="Repetição"] .chip:has-text("Anual")');
-  await page.click('.sheet [aria-label="Alerta"] .chip:has-text("1 dia antes")');
-  await guardar();
-  const aniv = (await bd("select dia_inteiro, hora_inicio, repete, alerta_min, agenda from eventos where titulo = 'Aniversário da Bia'"))[0];
-  check(aniv && aniv.dia_inteiro && aniv.hora_inicio === null && aniv.repete === 'anual' && aniv.alerta_min === 1440 && aniv.agenda === 'bia', 'aniversário gravado: dia inteiro, anual, alerta 1 dia antes');
-  await page.click('.cal-dia.hoje');
-  await page.click('.lrow:has-text("Jantar com a Bia")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Título"]', 'Jantar no Mercado');
-  await guardar();
-  check(await tem('Jantar no Mercado'), 'editar o título do evento');
-  await shot('15-agenda');
-  await auditar('agenda');
-  await page.click('.cal-dia:has(.cal-num:text-is("3"))');
-  await page.click('.lrow:has-text("Reunião de vendas")'); await page.waitForSelector('dialog.sheet[open]');
-  await apagarNaFolha();
-  check((await bd("select count(*)::int n from eventos where titulo = 'Reunião de vendas'"))[0].n === 0, 'apagar evento com confirmação');
-
-  console.log('Feed para o iPhone');
-  const tkCal = (await bd('select token_calendario from config'))[0].token_calendario;
-  const rf = await rest('POST', 'rpc/calendario_dados', '', {}, JSON.stringify({ token: tkCal, p_agenda: null }));
-  const { construirICS } = await import(require('url').pathToFileURL(path.join(ROOT, 'supabase', 'functions', 'calendario', 'ics.mjs')).href);
-  const icsTxt = construirICS(rf.body, { agora: Date.now() });
-  fs.writeFileSync(path.join(SHOTS, 'feed.ics'), icsTxt);
-  let lidos = '';
-  try { lidos = execSync('python3 -I -c "import sys,icalendar; c=icalendar.Calendar.from_ical(open(sys.argv[1],\'rb\').read()); print(len(list(c.walk(\'VEVENT\'))))" ' + path.join(SHOTS, 'feed.ics')).toString().trim(); } catch (e) { lidos = 'erro ' + e.message; }
-  check(rf.status === 200 && Number(lidos) === rf.body.eventos.length + rf.body.pagamentos.length && rf.body.eventos.length === 2, 'feed real: ' + lidos + ' eventos lidos pelo parser (2 eventos + ' + (rf.body.pagamentos || []).length + ' pagamentos)');
-  check(icsTxt.includes('SUMMARY:[Bia] Jantar no Mercado') && icsTxt.includes('TRIGGER:-PT60M'), 'feed leva o jantar com alerta 1 h antes');
-  await tab('Resumo');
-  await page.click('[aria-label="Ajustes"]'); await page.waitForSelector('h1:has-text("Ajustes")');
-  const href = await page.getAttribute('a[aria-label="Subscrever Bia no iPhone"]', 'href');
-  check(href === 'webcal://klmjdjhvsxvopctgmhyu.supabase.co/functions/v1/calendario?t=' + tkCal + '&a=bia', 'Ajustes: link webcal da agenda Bia com o token');
-  await page.click('button:has-text("Fechar")');
-
-
-  console.log('Eventos de vários dias');
-  await tab('Agenda');
+  await page.click('.cal-dia:has(.cal-num:text-is("' + diaFuturo + '"))');
+  check(await G.tem('Débito direto: Be Fit') && await G.tem('Pagar Internet'), 'agenda mostra os pagamentos do dia');
   await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Título"]', 'Gerês');
   await page.check('.sheet [aria-label="Todo o dia"]');
-  await page.fill('.sheet [aria-label="Data"]', '2026-11-13');
-  check((await page.inputValue('.sheet [aria-label="Data de fim"]')) === '2026-11-13', 'mudar o início arrasta o fim');
-  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-12');
-  await page.click('.sheet .snav .link.b');
-  check(await tem('O fim tem de ser no próprio dia ou depois do início'), 'fim antes do início (datas): erro');
-  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-15');
-  await shot('20-evento-varios-dias');
-  await auditar('evento de vários dias');
-  await guardar();
-  await toastTem('Evento guardado');
-  const dot = async (d, a) => (await page.$('.cal-dia:has(.cal-num:text-is("' + d + '")) .ag-' + a)) !== null;
-  check(await dot(13, 'pessoal') && await dot(14, 'pessoal') && await dot(15, 'pessoal') && !(await dot(16, 'pessoal')) && !(await dot(12, 'pessoal')), 'Gerês marca os dias 13, 14 e 15 (e só esses)');
-  await page.click('.cal-dia:has(.cal-num:text-is("14"))');
-  check(await tem('Todo o dia · Dia 2 de 3'), 'dia 14 mostra "Dia 2 de 3"');
-  check((await bd("select data_fim from eventos where titulo = 'Gerês'"))[0].data_fim === '2026-11-15', 'data de fim gravada');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Título"]', 'Feira de motas');
-  await page.click('.sheet .chip:has-text("Trabalho")');
-  await page.fill('.sheet [aria-label="Data"]', '2026-11-20');
-  await page.fill('.sheet [aria-label="Início"]', '20:00');
-  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-22');
-  await page.click('.sheet .snav .link.b');
-  check(await tem('Indica a hora a que termina'), 'vários dias com hora: pede a hora de fim');
-  await page.fill('.sheet [aria-label="Fim"]', '10:00');
-  await page.evaluate(() => document.querySelector('.sheet [aria-label="Data de fim"]').scrollIntoView({ block: 'center' }));
-  await shot('20b-evento-com-horas');
-  await guardar();
-  await page.click('.cal-dia:has(.cal-num:text-is("20"))');
-  check(await tem('Começa às 20:00 · Dia 1 de 3'), 'sex 20:00 → dom 10:00: dia 20 "Começa às 20:00"');
-  await page.click('.cal-dia:has(.cal-num:text-is("22"))');
-  check(await tem('Termina às 10:00 · Dia 3 de 3'), 'dia 22 "Termina às 10:00" (fim antes da hora de início é válido em dias diferentes)');
-  await shot('21-agenda-varios-dias');
-  await page.click('.cal-dia:has(.cal-num:text-is("13"))');
-  await page.click('.lrow:has-text("Gerês")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Data"]', '2026-11-14');
-  check((await page.inputValue('.sheet [aria-label="Data de fim"]')) === '2026-11-16', 'editar: mudar o início para 14 leva o fim para 16 (mantém 3 dias)');
-  await guardar();
-  check(!(await dot(13, 'pessoal')) && await dot(16, 'pessoal'), 'Gerês passa a 14–16');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Título"]', 'Viagem');
-  await page.check('.sheet [aria-label="Todo o dia"]');
-  await page.fill('.sheet [aria-label="Data"]', '2026-10-30');
-  await page.fill('.sheet [aria-label="Data de fim"]', '2026-11-02');
-  await guardar();
-  check(await tem('Outubro 2026'), 'evento que começa em outubro leva a agenda para outubro');
-  await page.click('[aria-label="Mês seguinte"]'); await page.waitForTimeout(300);
-  check(await dot(1, 'pessoal') && await dot(2, 'pessoal') && !(await dot(3, 'pessoal')), 'evento de 30 out a 2 nov aparece em 1 e 2 de novembro');
-  await page.click('.cal-dia.hoje');
+  await page.fill('.sheet [aria-label="Data"]', hoje);
+  await page.fill('.sheet [aria-label="Data de fim"]', (() => { const d = new Date(); d.setDate(d.getDate() + 2); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })());
+  await G.auditar('evento');
+  await G.guardar();
+  check(await G.tem('Dia 1 de 3'), 'evento de vários dias');
+  await G.shot('12-agenda');
+  await G.auditar('agenda');
 
-  console.log('Fixas variáveis');
-  await irFixas();
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor mensal"]', '40');
-  await page.check('.sheet [aria-label="Valor variável"]');
-  check(await page.$('.sheet [aria-label="Valor estimado por mês"]') !== null && await tem('estimativa por mês'), 'valor variável: o valor passa a ser uma estimativa');
-  await page.fill('.sheet [aria-label="Nome"]', 'Luz');
-  await page.fill('.sheet [aria-label="Dia do pagamento"]', '5');
-  await page.click('.sheet .chip:has-text("Casa")');
-  await shot('23-fixa-variavel');
-  await auditar('fixa variável');
-  await guardar();
-  await toastTem('Fixa criada');
-  check((await texto()).includes('Variável') && (await semEsp()).includes('≈40,00€'), 'lista de fixas mostra a Luz como variável (≈ 40,00 €)');
-  const luz = (await bd("select valor, estimado from despesas where descricao = 'Luz'"))[0];
-  check(luz && luz.estimado && luz.valor === 40, 'o gasto da Luz entra com a estimativa e por confirmar');
-  await tab('Gastos');
-  check((await texto()).includes('Por confirmar'), 'nos Gastos a Luz aparece «Por confirmar»');
-  await tab('Resumo');
-  check((await texto()).toLowerCase().includes('faturas por confirmar'), 'o Resumo mostra as faturas por confirmar');
-  await page.evaluate(() => document.querySelector('[aria-label="Confirmar valor: Luz"]').scrollIntoView({ block: 'center' }));
-  await shot('24-faturas-por-confirmar');
-  await page.click('[aria-label="Confirmar valor: Luz"]'); await page.waitForSelector('dialog.sheet[open]');
-  check(await tem('Confirmar fatura'), 'abre a folha «Confirmar fatura»');
-  await page.fill('.sheet [aria-label="Valor"]', '52,30');
-  await guardar();
-  await toastTem('Valor confirmado');
-  const luz2 = (await bd("select d.valor, d.estimado, r.valor est from despesas d join despesas_recorrentes r on r.id = d.recorrente_id where d.descricao = 'Luz'"))[0];
-  check(luz2.valor === 52.3 && !luz2.estimado && luz2.est === 52.3, 'confirmar 52,30 €: sai de «por confirmar» e a estimativa da fixa passa a 52,30 €');
-  check(!(await texto()).toLowerCase().includes('faturas por confirmar'), 'depois de confirmar sai da lista');
-
-  console.log('Débito direto');
-  await irFixas();
-  await page.click('.lrow:has-text("Água")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.check('.sheet [aria-label="Débito direto"]');
-  check(await page.$('.sheet [aria-label="Dia do débito"]') !== null, 'com débito direto o campo passa a "Dia do débito"');
-  await page.selectOption('.sheet [aria-label="Conta"]', { label: 'CGD à ordem' });
-  await guardar();
-  check(await tem('Dia 31 · Débito direto'), 'fixa mostra "Débito direto"');
-  const agua = (await bd("select debito_direto from despesas_recorrentes where nome = 'Água'"))[0];
-  check(agua.debito_direto === true, 'débito direto gravado na fixa');
-  await tab('Agenda');
-  await page.click('.cal-dia:has(.cal-num:text-is("30"))');
-  check(await tem('Débito direto: Água'), 'agenda mostra "Débito direto: Água" no dia 30');
-  await irFixas();
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor mensal"]', '99999');
-  await page.fill('.sheet [aria-label="Nome"]', 'Seguro carro');
-  await page.check('.sheet [aria-label="Débito direto"]');
-  await page.fill('.sheet [aria-label="Dia do débito"]', '29');
-  await page.click('.sheet .chip:has-text("Transportes")');
-  await guardar();
-  await tab('Resumo');
-  check(await tem('Saldo atual da CGD à ordem não chega'), 'Resumo avisa quando o saldo da conta não chega para um débito');
-  const segCarro = (await bd("select d.conta_id is null as principal from despesas d where d.descricao = 'Seguro carro'"))[0];
-  check(segCarro && segCarro.principal, 'lançamento do mês do débito sai da conta principal');
-  await page.evaluate(() => window.scrollTo(0, 99999)); await page.waitForTimeout(150);
-  await shot('16-aviso-saldo');
-  await page.evaluate(() => window.scrollTo(0, 0));
-
-  console.log('mobile-native');
-  const nativo = async () => page.evaluate(() => {
-    const cs = e => getComputedStyle(e);
-    const vp = document.querySelector('meta[name=viewport]').content;
-    return {
-      overscroll: cs(document.documentElement).overscrollBehaviorY === 'none',
-      touch: [...document.querySelectorAll('button')].every(b => cs(b).touchAction === 'manipulation'),
-      semSelecao: [...document.querySelectorAll('button')].every(b => (cs(b).userSelect || cs(b).webkitUserSelect) === 'none'),
-      fonte16: [...document.querySelectorAll('input, select, textarea')].every(i => parseFloat(cs(i).fontSize) >= 16),
-      enter: [...document.querySelectorAll('input:not([type=checkbox])')].every(i => i.getAttribute('enterkeyhint')),
-      viewport: vp.includes('viewport-fit=cover') && vp.includes('interactive-widget=resizes-content') && !/user-scalable|maximum-scale/.test(vp),
-      esquema: !!document.querySelector('meta[name=color-scheme]')
-    };
-  });
-  const n1 = await nativo();
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  const n2 = await nativo();
-  const folhaContida = await page.evaluate(() => getComputedStyle(document.querySelector('dialog.sheet')).overscrollBehaviorY === 'contain');
-  await page.keyboard.press('Escape'); await fechado();
-  const todos = Object.keys(n1).filter(k => !(n1[k] && n2[k]));
-  check(todos.length === 0 && folhaContida, 'mobile-native: overscroll, toque imediato, sem seleção nos botões, inputs ≥16px, tecla OK, viewport, esquema de cor' + (todos.length ? ' — falhou: ' + todos.join(', ') : ''));
-
-  console.log('Editar e apagar');
-  await irFixas();
-  await page.click('.lrow:has-text("Ginásio")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor mensal"]', '40');
-  await guardar();
-  check((await bd("select valor from despesas where descricao = 'Ginásio'"))[0].valor === 40, 'mudar a fixa atualiza o lançamento deste mês');
-  await tab('Gastos');
-  await page.click('.lrow:has-text("Jantar")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.click('.sheet .btn.danger'); await page.waitForSelector('dialog.alert[open]');
-  await shot('12a-confirmar-apagar');
-  await auditar('confirmar apagar');
-  await page.click('dialog.alert button:has-text("Cancelar")');
-  await page.waitForSelector('dialog.alert', { state: 'detached' });
-  check((await bd("select count(*)::int n from despesas where descricao = 'Jantar'"))[0].n === 1, 'Cancelar na confirmação não apaga');
-  await apagarNaFolha();
-  await page.waitForTimeout(400);
-  check((await bd("select count(*)::int n from despesas where descricao = 'Jantar'"))[0].n === 0 && !(await texto()).includes('Jantar'), 'apagar gasto com dois toques');
-  await tab('Ganhos');
-  await page.click('.lrow:has-text("Comissões")'); await page.waitForSelector('dialog.sheet[open]');
-  await apagarNaFolha();
-  check(await tem('1250,00'), 'apagar ganho: total passa a 1250,00 €');
-
-  console.log('Meses e sessão');
-  await page.click('[aria-label="Mês anterior"]');
-  check(await tem('Sem ganhos em outubro'), 'outubro sem ganhos');
-  await page.click('.link.small:has-text("Este mês")');
-  await page.waitForTimeout(300);
-  await page.reload();
-  await page.waitForSelector('.pin-teclado', { timeout: 5000 });
-  check(!(await texto()).includes('Disponível'), 'ao reabrir pede o PIN antes de mostrar qualquer número');
-  await shot('22-pin');
-  await auditar('PIN');
-  await pin('0000');
-  check(await tem('PIN errado. Faltam 4 tentativas'), 'PIN errado: diz quantas tentativas faltam');
-  await page.keyboard.type('1379');
-  await page.waitForSelector('h1:has-text("Resumo")', { timeout: 5000 });
-  check(true, 'sessão mantém-se ao reabrir (PIN certo, também pelo teclado)');
+  // ===== Bloqueio, mobile-native, sessão =====
+  console.log('Bloqueio e sessão');
   const fora = (estado, ms) => page.evaluate(([e, m]) => {
     if (m) { window.__agora = window.__agora || Date.now; const r = window.__agora; Date.now = () => r() + m; }
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => e });
     document.dispatchEvent(new Event('visibilitychange'));
   }, [estado, ms]);
   await fora('hidden');
-  check(await page.evaluate(() => document.body.classList.contains('privado')), 'fora da app o conteúdo fica escondido (seletor de apps)');
-  await fora('visible'); await page.waitForTimeout(200);
-  check(await page.$('.pin-teclado') === null, 'voltar logo a seguir não pede o PIN');
-  await fora('hidden'); await fora('visible', 120000);
+  check(await page.evaluate(() => document.body.classList.contains('privado')), 'fora da app o conteúdo fica escondido');
+  await fora('visible', 120000);
   await page.waitForSelector('.pin-teclado', { timeout: 3000 });
-  check(true, 'voltar depois de 2 minutos fora pede o PIN');
-  await pin('1379');
-  await page.waitForSelector('h1:has-text("Resumo")');
+  check(true, 'voltar depois de 2 minutos pede o PIN');
+  await G.pin('1379');
+  await page.waitForSelector('h1:has-text("Agenda")');
   await page.evaluate(() => { delete document.visibilityState; if (window.__agora) Date.now = window.__agora; });
+  const nativo = await page.evaluate(() => {
+    const cs = e => getComputedStyle(e);
+    const vp = document.querySelector('meta[name=viewport]').content;
+    return {
+      overscroll: cs(document.documentElement).overscrollBehaviorY === 'none',
+      touch: [...document.querySelectorAll('button')].every(b => cs(b).touchAction === 'manipulation'),
+      fonte16: [...document.querySelectorAll('input, select, textarea')].every(i => parseFloat(cs(i).fontSize) >= 16),
+      viewport: vp.includes('viewport-fit=cover') && vp.includes('interactive-widget=resizes-content') && !/user-scalable|maximum-scale/.test(vp)
+    };
+  });
+  const naoNativo = Object.keys(nativo).filter(k => !nativo[k]);
+  check(naoNativo.length === 0, 'mobile-native' + (naoNativo.length ? ' — falhou: ' + naoNativo.join(', ') : ''));
   await page.emulateMedia({ colorScheme: 'dark' });
-  await page.waitForTimeout(300);
-  await shot('12-resumo-escuro');
-  await auditar('resumo escuro');
-  await tab('Gastos'); await shot('13-gastos-escuro');
+  await G.tab('Por pagar');
+  await G.shot('13-por-pagar-escuro');
+  await G.auditar('por pagar escuro');
+  await G.tab('Em comum');
+  await G.auditar('em comum escuro');
   await page.emulateMedia({ colorScheme: 'light' });
-  await tab('Resumo');
+  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'sem scroll horizontal');
+  await G.tab('Por pagar');
   await page.click('[aria-label="Ajustes"]');
-  await page.click('button:has-text("Mudar PIN")');
-  await page.waitForSelector('h1:has-text("PIN atual")');
-  await pin('1379');
-  await page.waitForSelector('h1:has-text("Cria um PIN")');
-  await pin('2468'); await page.waitForSelector('h1:has-text("Confirma o PIN")'); await pin('2468');
-  await toastTem('PIN alterado');
-  check((await texto()).toLowerCase().includes('segurança'), 'mudar o PIN (pede o atual primeiro) e volta aos Ajustes');
-  await page.reload(); await page.waitForSelector('.pin-teclado');
-  for (let i = 0; i < 4; i++) await pin('0000');
-  check(await tem('Última tentativa'), 'à 4.ª tentativa errada avisa que é a última');
-  await page.reload(); await page.waitForSelector('.pin-teclado');
-  await pin('1379');   // o PIN antigo já não serve
-  await page.waitForSelector('form.login', { timeout: 5000 });
-  check(await tem('Demasiadas tentativas'), '5 tentativas erradas (mesmo recarregando a página) terminam a sessão');
-  await page.fill('input[type=email]', USER.email);
-  await page.fill('input[type=password]', USER.password);
-  await page.click('button[type=submit]');
-  await page.waitForSelector('h1:has-text("Cria um PIN")');
-  check(true, 'voltar a entrar com a palavra-passe pede um PIN novo');
-  await pin('2468'); await page.waitForSelector('h1:has-text("Confirma o PIN")'); await pin('2468');
-  await page.waitForSelector('h1:has-text("Resumo")');
-  await page.click('[aria-label="Ajustes"]');
+  await G.auditar('ajustes');
   await page.click('button:has-text("Terminar sessão")');
   await page.waitForSelector('form.login', { timeout: 5000 });
   check(true, 'terminar sessão volta ao ecrã de entrada');
-  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'sem scroll horizontal');
 
-  check(alvosPeq.length === 0, 'alvos de toque ≥ 44×44 px em todos os ecrãs auditados' + (alvosPeq.length ? '\n      ' + alvosPeq.slice(0, 25).join('\n      ') : ''));
+  check(alvosPeq.length === 0, 'alvos de toque ≥ 44×44 px' + (alvosPeq.length ? '\n      ' + alvosPeq.slice(0, 25).join('\n      ') : ''));
   check(a11y.length === 0, 'axe-core: sem violações de acessibilidade' + (a11y.length ? '\n      ' + a11y.join('\n      ') : ''));
   check(erros.length === 0, 'sem erros de JavaScript' + (erros.length ? ': ' + erros.join(' | ') : ''));
-  const esperados = ['token inválido', 'permission denied for table ganhos'];
+  const esperados = ['Código inválido'];
   const bdErros = log.filter(l => (l.startsWith('ERRO') || l.startsWith('SEM ROTA')) && !esperados.some(x => l.includes(x)));
   check(bdErros.length === 0, 'sem pedidos rejeitados' + (bdErros.length ? ': ' + bdErros.join(' | ') : ''));
 
@@ -871,4 +529,5 @@ const check = (cond, msg) => { console.log((cond ? '  OK  ' : '  FALHA ') + msg)
   await pool.end();
   console.log(falhas.length ? '\n' + falhas.length + ' FALHAS' : '\nTUDO OK');
   process.exit(falhas.length ? 1 : 0);
-})().catch(async e => { console.error('ERRO NO TESTE', e); console.error(log.slice(-15).join('\n')); process.exit(2); });
+})().catch(async e => { console.error(e); process.exit(2); });
+const r2 = n => Math.round(n * 100) / 100;

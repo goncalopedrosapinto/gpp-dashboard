@@ -1,6 +1,6 @@
 # GPP Dashboard
 
-Web app pessoal para iPhone: os meus gastos e ganhos, contas partilhadas com a Bia, registo automático de gastos Apple Pay e despesas fixas.
+Web app para iPhone: registar despesas (minhas e da casa, em comum com a Bia), saber o que falta pagar e quem deve a quem. Não segue saldos bancários nem receitas.
 
 - **Frontend:** HTML + JavaScript, instalável no ecrã principal do iPhone.
 - **Backend:** Supabase (projeto *GPP Dashboard*). Os dados estão protegidos por RLS: cada linha só é visível ao dono.
@@ -29,6 +29,16 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 ```
 
 ## Regras de negócio
+
+**v2 (atual)**
+
+- **Por pagar** (ecrã principal): despesas não pagas, em atraso, dos próximos 7 dias e do resto do mês. O visto (círculo) marca como paga e guarda a data; tocar outra vez desmarca. Uma fatura estimada (fixa variável) pede o valor real antes de ficar paga. O visto é sempre manual.
+- **Despesas**: só minhas ou em comum. Uma despesa nova de hoje vem paga; com data futura fica por pagar. Wallet e notificações do banco entram pagas e só minhas, em «Por rever».
+- **Em comum**: um casal de 2 membros (o 2.º pode ainda não ter conta). Cada despesa em comum guarda quem pagou e a parte do membro 1 (`pct_m1`); a divisão por defeito é a percentagem de cada um. `casal_saldos` = pagou − a sua parte ± acertos, só com despesas pagas. A Bia entra com um código de convite (7 dias, uso único). As despesas pessoais de cada um são privadas (RLS: dono, ou membro do casal da despesa).
+- **Fixas**: entram todos os meses como «por pagar»; podem ser em comum (geradas por quem abrir a app primeiro). O feed do iPhone mostra as fixas em comum aos dois, com a parte de cada um.
+- **Saem do ecrã** (as tabelas ficam, sem dados apagados): contas e saldos, ajustes, transferências, plafond, ganhos e a calculadora.
+
+**v1 (histórico)**
 
 - **Resumo:** só os meus números. Saldo = ganhos − custo líquido; custo líquido = gastos (total pago) − o que a Bia já devolveu.
 - **Conta partilhada:** entra pelo total que paguei, com a parte da Bia. Fica *a receber* até marcar que recebi. O reembolso reduz o custo; não conta como ganho.

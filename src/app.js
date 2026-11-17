@@ -4,11 +4,10 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v1.10 · nov 2026';
+const VERSAO = 'v2.0 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
-const CAT_GANHOS = ['Salário', 'Comissões', 'Prémios', 'Outros'];
-const TITULOS = { mes: 'Resumo', despesas: 'Gastos', ganhos: 'Ganhos', agenda: 'Agenda', calcular: 'Calcular', fixas: 'Fixas', ajustes: 'Ajustes' };
-const TABS = ['mes', 'despesas', 'ganhos', 'agenda', 'calcular'];
+const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
+const TABS = ['pagar', 'despesas', 'comum', 'agenda'];
 
 const app = document.getElementById('app');
 if (!window.supabase || !window.supabase.createClient) {
@@ -20,10 +19,9 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 });
 
 const S = {
-  user: null, config: null, tab: 'mes', mes: null, filtro: 'todas', loading: false, seq: 0,
-  despesas: [], ganhos: [], aReceber: [], proximos: [], fixas: [], contas: [], eventos: [], transf: [], diaSel: null,
-  bloqueado: false, saiuEm: 0, avisoLogin: null,
-  calc: { init: false, eu: '', ela: '', valor: '' }
+  user: null, config: null, tab: 'pagar', mes: null, filtro: 'todas', loading: false, seq: 0,
+  despesas: [], atrasados: [], fixas: [], eventos: [], acertos: [], casal: null, diaSel: null,
+  bloqueado: false, saiuEm: 0, avisoLogin: null
 };
 
 // ===================== Utilitários =====================
@@ -52,11 +50,11 @@ function append(el, kid) {
 }
 const SVGNS = 'http://www.w3.org/2000/svg';
 const ICONS = {
-  mes: ['M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
+  pagar: ['M9 11l3 3 8-8', 'M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9'],
+  comum: ['M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1', 'M16 3.13a4 4 0 0 1 0 7.75', 'M22 21v-1a6 6 0 0 0-4-5.65'],
+  visto: ['M5 12.5l4.5 4.5L19 7.5'],
   despesas: ['M12 21V9', 'M7 14l5-5 5 5', 'M5 3h14'],
-  ganhos: ['M12 3v12', 'M7 10l5 5 5-5', 'M5 21h14'],
   agenda: ['M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z', 'M8 2v4', 'M16 2v4', 'M3 10h18', 'M8 14h.01', 'M12 14h.01', 'M16 14h.01', 'M8 18h.01', 'M12 18h.01'],
-  calcular: ['M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z', 'M8.5 7.5h7', 'M9 12h.01', 'M12 12h.01', 'M15 12h.01', 'M9 16h.01', 'M12 16h.01', 'M15 16h.01'],
   fixas: ['M17 2l4 4-4 4', 'M3 11V9a3 3 0 0 1 3-3h15', 'M7 22l-4-4 4-4', 'M21 13v2a3 3 0 0 1-3 3H3'],
   ajustes: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6']
 };
@@ -122,21 +120,15 @@ function diaCurto(d) {
   const [y, mo, da] = d.split('-').map(Number);
   return da + ' ' + new Intl.DateTimeFormat('pt-PT', { month: 'short' }).format(new Date(y, mo - 1, da)).replace('.', '');
 }
-function dividirLocal(v, a, b) {
-  const t = a + b;
-  if (!(t > 0) || !(v > 0)) return null;
-  const eu = r2(v * a / t);
-  return { eu: eu, ela: r2(v - eu) };
-}
-const nomeEla = () => ((S.config && S.config.nome_ela) || '').trim();
-const ELA = () => nomeEla() || 'Ela';
-const DA = () => nomeEla() ? 'da ' + nomeEla() : 'dela';
+const nomeEla = () => ((S.casal && S.casal.outro && S.casal.outro.nome) || (S.config && S.config.nome_ela) || '').trim();
+const ELA = () => nomeEla() || 'Bia';
+const DA = () => 'da ' + ELA();
 
-// Conta partilhada: quanto te custa e em que estado está
-const parte = x => (x.partilhada && x.parte_dela != null) ? Number(x.parte_dela) : 0;
-const recebidoDe = x => (x.partilhada && x.recebido) ? parte(x) : 0;
-const custo = x => r2(Number(x.valor) - recebidoDe(x));
-const porReceber = x => x.partilhada && !x.recebido;
+// Despesas em comum: a minha parte e quem pagou
+const comum = x => x.casal_id != null;
+const pctEu = x => (!comum(x) || x.pct_m1 == null || !S.casal ? 100 : S.casal.eu.ordem === 1 ? Number(x.pct_m1) : 100 - Number(x.pct_m1));
+const minhaParte = x => r2(Number(x.valor) * pctEu(x) / 100);
+const pagouEu = x => !!(S.casal && x.pago_por_membro === S.casal.eu.membro_id);
 const fonteTxt = x => (x.fonte === 'notificacao' ? 'Notificação do banco' : x.fonte === 'ambas' ? 'Apple Pay + banco' : 'Apple Pay');
 const porRever = x => x.origem === 'apple_pay' && !x.categoria;
 
@@ -151,7 +143,11 @@ function toast(msg, bad) {
 function traduzErro(e) {
   const m = (e && (e.message || e.error_description || e.msg)) || String(e);
   if (/invalid login credentials/i.test(m)) return 'Email ou palavra-passe errados.';
-  if (/email not confirmed/i.test(m)) return 'Conta por confirmar. Confirma o utilizador no Supabase.';
+  if (/email not confirmed/i.test(m)) return 'Ainda não confirmaste o email. Abre o email que te enviámos e volta a entrar.';
+  if (/already registered|already exists/i.test(m)) return 'Já existe uma conta com este email. Entra com ela.';
+  if (/password should be|weak password/i.test(m)) return 'Palavra-passe fraca: usa pelo menos 8 caracteres, com letras e números.';
+  if (/signups not allowed|signup is disabled/i.test(m)) return 'Criar contas está desligado no servidor. Pede ao Gonçalo para o ligar.';
+  if (/^(Já tens|Código inválido|A conta em comum|Ainda não tens|A percentagem)/.test(m)) return m;
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return 'Sem ligação. Tenta outra vez.';
   if (/jwt|session|refresh token/i.test(m)) return 'A sessão expirou. Entra outra vez.';
   if (/parte_dela_ck/.test(m)) return 'A parte ' + DA() + ' não pode ser maior que o total.';
@@ -239,9 +235,9 @@ function sheet(titulo, conteudo, onSave) {
   const inner = h('div', { class: 'sheet-in' },
     h('div', { class: 'grab', 'aria-hidden': 'true' }),
     h('div', { class: 'snav' },
-      h('button', { class: 'link', type: 'button', text: 'Cancelar', onclick: () => fechar() }),
+      h('button', { class: 'link', type: 'button', text: onSave ? 'Cancelar' : 'Fechar', onclick: () => fechar() }),
       h('h2', { class: 'stitle', id: id + '-t', text: titulo }),
-      h('div', { class: 'r' }, guardar)),
+      h('div', { class: 'r' }, onSave ? guardar : null)),
     err, conteudo);
   dlg.append(inner);
   let campoErr = null;
@@ -277,28 +273,26 @@ function sheet(titulo, conteudo, onSave) {
 
 // ===================== Dados =====================
 async function carregarMes() {
-  const m = S.mes, seq = ++S.seq;
+  const m = S.mes, seq = ++S.seq, fim = m.slice(0, 8) + pad2(ultimoDia(m));
   S.loading = true;
   try {
     if (m <= mesAtual()) await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
     const res = await Promise.all([
       q(sb.from('despesas').select('*').eq('mes', m).order('data', { ascending: false }).order('id', { ascending: false })),
-      q(sb.from('ganhos').select('*').eq('mes', m).order('data', { ascending: false }).order('id', { ascending: false })),
-      q(sb.from('despesas').select('*').eq('partilhada', true).eq('recebido', false).order('data', { ascending: false }).order('id', { ascending: false })),
-      q(sb.from('proximos_pagamentos').select('*').order('data_vencimento').limit(5)),
-      q(sb.from('saldos_contas').select('*').order('ordem').order('conta_id')),
-      q(sb.from('eventos').select('*').eq('repete', 'nunca').lte('data', m.slice(0, 8) + pad2(ultimoDia(m))).gte('data_fim', m)),
-      q(sb.from('eventos').select('*').neq('repete', 'nunca').lte('data', m.slice(0, 8) + pad2(ultimoDia(m)))),
-      q(sb.from('transferencias').select('*').gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m))).order('data', { ascending: false }).order('id', { ascending: false }))
+      q(sb.from('despesas').select('*').eq('pago', false).lt('data', m).order('data')),
+      q(sb.from('casal_saldos').select('*').order('ordem')),
+      q(sb.from('acertos').select('*').order('data', { ascending: false }).order('id', { ascending: false }).limit(30)),
+      q(sb.from('eventos').select('*').eq('repete', 'nunca').lte('data', fim).gte('data_fim', m)),
+      q(sb.from('eventos').select('*').neq('repete', 'nunca').lte('data', fim))
     ]);
     if (seq !== S.seq) return;
     S.despesas = res[0] || [];
-    S.ganhos = res[1] || [];
-    S.aReceber = res[2] || [];
-    S.proximos = res[3] || [];
-    S.contas = res[4] || [];
-    S.eventos = (res[5] || []).concat(res[6] || []);
-    S.transf = res[7] || [];
+    S.atrasados = res[1] || [];
+    const mem = res[2] || [];
+    const eu = S.user ? mem.find(x => x.user_id === S.user.id) : null;
+    S.casal = eu ? { id: eu.casal_id, eu: eu, outro: mem.find(x => x.membro_id !== eu.membro_id) || null } : null;
+    S.acertos = res[3] || [];
+    S.eventos = (res[4] || []).concat(res[5] || []);
   } catch (e) { if (seq === S.seq) erro(e); }
   finally { if (seq === S.seq) S.loading = false; }
 }
@@ -315,240 +309,255 @@ async function guardarConfig(campos, silencioso) {
     if (!silencioso) { render(); toast('Guardado'); }
   } catch (e) { erro(e); }
 }
-async function marcarRecebido(x) {
-  if (x.parte_dela == null) { abrirDespesa(x); return; }
+// Visto: marcar como paga (uma fatura estimada pede primeiro o valor real)
+async function alternarPago(x) {
+  if (!x.pago && x.estimado) { abrirDespesa(x, { marcarPaga: true }); return; }
   try {
-    await q(sb.from('despesas').update({ recebido: true }).eq('id', x.id));
+    await q(sb.from('despesas').update({ pago: !x.pago }).eq('id', x.id));
     await recarregar();
-    toast('Recebido: ' + fmt(x.parte_dela));
+    toast(x.pago ? 'Voltou a «por pagar»' : 'Paga · ' + (x.descricao || fmt(x.valor)));
   } catch (e) { erro(e); }
 }
 
 // ===================== Ecrãs =====================
-function tagsPartilha(x) {
-  if (!x.partilhada) return null;
-  if (x.parte_dela == null) return 'Partilhada · parte ' + DA() + ' por definir';
-  return x.recebido ? ELA() + ' pagou ' + fmt(x.parte_dela) : ELA() + ' deve ' + fmt(x.parte_dela);
+function linhaPagar(x) {
+  const t = x.descricao || x.comerciante || 'Sem descrição', hoje = hojeISO();
+  const atraso = !x.pago && x.data < hoje;
+  const quando = d => (d === hoje ? 'hoje' : diaCurto(d));
+  const sub = [x.pago ? 'Paga ' + quando(x.pago_em || x.data) : (atraso ? 'Venceu ' : 'Vence ') + quando(x.data),
+    comum(x) ? 'Comum · tua parte ' + fmt(minhaParte(x)) : null, x.estimado ? 'estimativa' : null];
+  return h('div', { class: 'lrow' },
+    h('button', { type: 'button', class: 'visto' + (x.pago ? ' on' : ''), role: 'checkbox', 'aria-checked': String(!!x.pago),
+      'aria-label': (x.pago ? 'Paga: ' : 'Marcar como paga: ') + t, onclick: () => alternarPago(x) }, x.pago ? icon(ICONS.visto) : null),
+    h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
+      h('div', { class: 'rtitle', text: t }),
+      h('div', { class: 'rsub' + (atraso ? ' warn' : ''), text: sub.filter(Boolean).join(' · ') })),
+    h('div', { class: 'rval' + (atraso ? ' neg' : ''), text: (x.estimado ? '≈ ' : '') + fmt(x.valor) }));
 }
 
-function viewMes() {
-  if (S.loading && !S.despesas.length && !S.ganhos.length) return carregando();
-  const out = [];
-  const ganhos = soma(S.ganhos, x => x.valor);
-  const gastos = soma(S.despesas, x => x.valor);
-  const recebido = soma(S.despesas, recebidoDe);
-  const custoLiq = r2(gastos - recebido);
-  const saldo = r2(ganhos - custoLiq);
-  const aVencer = S.despesas.some(x => x.data > hojeISO());
+function viewPagar() {
+  if (S.loading && !S.despesas.length) return carregando();
+  const hoje = hojeISO(), semana = somaDias(hoje, 7), atual = S.mes === mesAtual();
+  const porPagar = (atual ? S.atrasados : []).concat(S.despesas.filter(x => !x.pago)).sort((a, b) => (a.data < b.data ? -1 : 1));
+  const atraso = porPagar.filter(x => x.data < hoje), estaSemana = porPagar.filter(x => x.data >= hoje && x.data <= semana), depois = porPagar.filter(x => x.data > semana);
+  const out = [group(h('div', { class: 'hero' },
+    h('div', { class: 'k', text: 'Por pagar' + (atual ? '' : ' em ' + mesMin(S.mes)) }),
+    h('div', { class: 'big' + (atraso.length ? ' neg' : ''), text: fmt(soma(porPagar, x => x.valor)) }),
+    h('div', { class: 'k', text: porPagar.length ? porPagar.length + (porPagar.length === 1 ? ' pagamento' : ' pagamentos') + (atraso.length ? ' · ' + atraso.length + ' em atraso' : '') : 'Está tudo pago.' })))];
+  if (!porPagar.length && !S.fixas.length) out.push(vazio('Ainda não tens pagamentos fixos (renda, água, luz, ginásio…).', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
+  if (atraso.length) out.push(glabel('Em atraso'), lista(atraso.map(linhaPagar)));
+  if (estaSemana.length) out.push(glabel('Próximos 7 dias'), lista(estaSemana.map(linhaPagar)));
+  if (depois.length) out.push(glabel(atual ? 'Mais tarde este mês' : 'Por pagar'), lista(depois.map(linhaPagar)));
+  const pagosFixas = S.despesas.filter(x => x.pago && x.recorrente_id);
+  if (pagosFixas.length) out.push(glabel('Já pagos'), lista(pagosFixas.map(linhaPagar)));
+  if (porPagar.length) out.push(hint('Toca no círculo para marcar como paga. Se te enganares, toca outra vez.'));
 
-  out.push(...blocoDinheiro());
-
-  out.push(glabel('Balanço de ' + mesMin(S.mes)), group(
-    h('div', { class: 'hero' },
-      h('div', { class: 'k', text: S.ganhos.length ? 'Ganhos menos custo líquido' : 'Ainda sem ganhos registados este mês' }),
-      h('div', { class: 'big ' + (saldo >= 0 ? 'pos' : 'neg'), text: fmt(saldo) })),
-    kv('Ganhos', fmt(ganhos)),
-    kv('Gastos (total pago)', fmt(gastos)),
-    recebido > 0 ? kv('Recebido ' + DA(), '− ' + fmt(recebido), 'pos') : null,
-    kv('Custo líquido', fmt(custoLiq), 'strong')
-  ), aVencer ? hint('Inclui despesas fixas que ainda vencem este mês.') : null);
-
-  // Fixas variáveis (água, luz…): entram com a estimativa até escreveres o valor da fatura
-  const estimados = S.despesas.filter(x => x.estimado).sort((a, b) => (a.data < b.data ? -1 : 1));
-  if (estimados.length) {
-    out.push(glabel('Faturas por confirmar'), lista(estimados.map(x => {
-      const t = x.descricao || 'Despesa fixa';
-      return h('div', { class: 'lrow' },
-        h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
-          h('div', { class: 'rtitle', text: t }),
-          h('div', { class: 'rsub', text: diaCurto(x.data) + ' · estimativa' })),
-        h('div', { class: 'rval', text: '≈ ' + fmt(x.valor) }),
-        h('button', { type: 'button', class: 'mini', text: 'Confirmar', 'aria-label': 'Confirmar valor: ' + t, onclick: () => abrirDespesa(x) }));
-    })), hint('Escreve o valor da fatura quando a receberes. Até lá, os saldos contam com a estimativa (média das últimas 3).'));
-  }
-
-  // A receber (todos os meses)
-  if (S.aReceber.length) {
-    const total = soma(S.aReceber, parte);
-    const semParte = S.aReceber.filter(x => x.parte_dela == null).length;
-    out.push(glabel('A receber ' + DA()), group(
-      h('div', { class: 'hero' },
-        h('div', { class: 'k', text: S.aReceber.length + (S.aReceber.length === 1 ? ' conta partilhada' : ' contas partilhadas') }),
-        h('div', { class: 'big', text: fmt(total) }))),
-      h('div', { style: 'height:8px' }),
-      lista(S.aReceber.map(x => {
-        const t = x.descricao || x.comerciante || 'Sem descrição';
-        return h('div', { class: 'lrow' },
-          h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirDespesa(x) },
-            h('div', { class: 'rtitle', text: t }),
-            h('div', { class: 'rsub', text: diaCurto(x.data) + ' · total ' + fmt(x.valor) })),
-          h('div', { class: 'rval', text: x.parte_dela != null ? fmt(x.parte_dela) : '—' }),
-          h('button', {
-            type: 'button', class: 'mini', text: x.parte_dela != null ? 'Recebi' : 'Definir',
-            'aria-label': x.parte_dela != null ? 'Recebi: ' + t + ', ' + fmt(x.parte_dela) : 'Definir: parte ' + DA() + ' em ' + t,
-            onclick: () => marcarRecebido(x)
-          }));
-      })),
-      semParte ? hint(semParte + (semParte === 1 ? ' conta sem' : ' contas sem') + ' a parte ' + DA() + ' definida.', 'warn') : null);
-  }
-
-  // Por categoria (custo líquido)
+  // Quanto gastaste: as tuas despesas + a tua parte das despesas em comum
+  const pessoais = S.despesas.filter(x => !comum(x)), comuns = S.despesas.filter(comum);
+  out.push(glabel('Gastos de ' + mesMin(S.mes)), group(
+    h('div', { class: 'hero' }, h('div', { class: 'k', text: 'A tua parte' }), h('div', { class: 'big', text: fmt(soma(S.despesas, minhaParte)) })),
+    kv('Só teus', fmt(soma(pessoais, x => x.valor))),
+    S.casal || comuns.length ? kv('A tua parte em comum', fmt(soma(comuns, minhaParte))) : null));
   const cats = {};
-  S.despesas.forEach(x => { const c = x.categoria || 'Sem categoria'; cats[c] = (cats[c] || 0) + custo(x); });
+  S.despesas.forEach(x => { const c = x.categoria || 'Sem categoria'; cats[c] = (cats[c] || 0) + minhaParte(x); });
   const porCat = Object.keys(cats).map(c => [c, r2(cats[c])]).filter(c => c[1] > 0).sort((a, b) => b[1] - a[1]);
   if (porCat.length) {
     const max = porCat[0][1] || 1;
-    out.push(glabel('Para onde foi o teu dinheiro'), lista(porCat.map(([c, v]) => h('div', { class: 'catrow' },
+    out.push(glabel('Para onde foi'), lista(porCat.map(([c, v]) => h('div', { class: 'catrow' },
       h('div', { class: 'cattop' }, h('span', { text: c }), h('span', { class: 'num gval', text: fmt(v) })),
       h('div', { class: 'bar', 'aria-hidden': 'true', style: 'width:' + Math.max(2, Math.round(v / max * 100)) + '%' })))));
   }
-
-  out.push(glabel('Próximos pagamentos'));
-  if (S.proximos.length) {
-    const avisos = avisosSaldo(S.proximos);
-    out.push(lista(S.proximos.map((x, i) => h('div', { class: 'lrow' },
-      h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: x.nome }),
-        h('div', { class: 'rsub' + (avisos[i] ? ' warn' : ''), text: [diaCurto(x.data_vencimento), x.para_conta_id != null ? 'Para ' + nomeConta(x.para_conta_id) : null, x.debito_direto ? 'Débito direto' : null,
-          x.partilhada ? 'Partilhada' : null, avisos[i]].filter(Boolean).join(' · ') })),
-      h('div', { class: 'rval', text: (x.variavel ? '≈ ' : '') + fmt(x.valor) })))));
-    out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Gerir despesas fixas', onclick: () => irPara('fixas') })));
-  } else out.push(vazio('Sem despesas fixas.', 'Adicionar despesa fixa', () => { irPara('fixas'); abrirFixa(); }));
+  if (S.casal) {
+    const v = Number(S.casal.eu.saldo);
+    out.push(glabel('Com ' + ELA()), lista([h('button', { type: 'button', class: 'lrow', onclick: () => irPara('comum') },
+      h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: textoSaldo(v) })),
+      h('div', { class: 'rval' + (v < -0.005 ? ' neg' : v > 0.005 ? ' pos' : ''), text: fmt(Math.abs(v)) }),
+      h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }))]));
+  }
   return out;
 }
 
-const FILTROS = { todas: () => true, rever: x => porRever(x) || !!x.estimado, partilhadas: x => x.partilhada, receber: porReceber };
+const FILTROS = { todas: () => true, minhas: x => !comum(x), comum: comum, porpagar: x => !x.pago, rever: x => porRever(x) || !!x.estimado };
 function linhaDespesa(x) {
   const tags = [];
   if (x.categoria) tags.push(x.categoria); else if (x.origem === 'apple_pay') tags.push('Por rever');
+  if (comum(x)) tags.push('Comum · pagou ' + (pagouEu(x) ? 'eu' : ELA()));
+  if (!x.pago) tags.push(x.data < hojeISO() ? 'Em atraso' : 'Por pagar');
   if (x.origem === 'apple_pay') tags.push(fonteTxt(x));
   if (x.origem === 'recorrente') tags.push('Fixa');
   if (x.estimado) tags.push('Por confirmar');
-  const tp = tagsPartilha(x); if (tp) tags.push(tp);
-  if (x.data > hojeISO()) tags.push('a vencer');
   return h('button', { type: 'button', class: 'lrow', onclick: () => abrirDespesa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.descricao || x.comerciante || 'Sem descrição' }),
-      h('div', { class: 'rsub' + (porRever(x) || x.estimado ? ' warn' : ''), text: tags.join(' · ') })),
-    h('div', { class: 'rval', text: (x.estimado ? '≈ ' : '') + fmt(x.valor) }),
+      h('div', { class: 'rsub' + (porRever(x) || x.estimado || (!x.pago && x.data < hojeISO()) ? ' warn' : ''), text: tags.join(' · ') })),
+    h('div', { class: 'rvals' },
+      h('div', { class: 'rval', text: (x.estimado ? '≈ ' : '') + fmt(x.valor) }),
+      comum(x) ? h('div', { class: 'rsub num', text: 'tua ' + fmt(minhaParte(x)) }) : null),
     h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
 }
 function viewDespesas() {
-  const nRever = S.despesas.filter(FILTROS.rever).length, nRec = S.despesas.filter(porReceber).length;
-  const filtros = [['todas', 'Todos'], ['rever', 'Por rever' + (nRever ? ' (' + nRever + ')' : '')], ['partilhadas', 'Partilhados'], ['receber', 'A receber' + (nRec ? ' (' + nRec + ')' : '')]];
-  const out = [h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Filtrar gastos' }, filtros.map(([k, l]) => h('button', {
+  const nRever = S.despesas.filter(FILTROS.rever).length, nPagar = S.despesas.filter(FILTROS.porpagar).length;
+  const filtros = [['todas', 'Todas'], ['minhas', 'Só minhas'], ['comum', 'Em comum'], ['porpagar', 'Por pagar' + (nPagar ? ' (' + nPagar + ')' : '')], ['rever', 'Por rever' + (nRever ? ' (' + nRever + ')' : '')]];
+  const out = [h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Filtrar despesas' }, filtros.map(([k, l]) => h('button', {
     type: 'button', class: 'chip', text: l, 'aria-pressed': String(S.filtro === k),
     onclick: () => { S.filtro = k; render(); const f = document.querySelector('.chips.scroll [aria-pressed="true"]'); if (f) f.focus(); }
   })))];
   if (S.loading && !S.despesas.length) { out.push(...carregando()); return out; }
-  const sel = S.despesas.filter(FILTROS[S.filtro]);
+  const sel = S.despesas.filter(FILTROS[S.filtro] || FILTROS.todas);
   if (!sel.length) {
-    if (S.filtro !== 'todas' && S.despesas.length) out.push(vazio(S.filtro === 'rever' ? 'Nada por rever.' : 'Nada neste filtro.', 'Ver todos', () => { S.filtro = 'todas'; render(); }));
-    else out.push(vazio('Sem gastos em ' + mesMin(S.mes) + '.', 'Registar gasto', () => abrirDespesa()));
+    if (S.filtro !== 'todas' && S.despesas.length) out.push(vazio('Nada neste filtro.', 'Ver todas', () => { S.filtro = 'todas'; render(); }));
+    else out.push(vazio('Sem despesas em ' + mesMin(S.mes) + '.', 'Registar despesa', () => abrirDespesa()));
     return out;
   }
-  out.push(hint(sel.length + (sel.length === 1 ? ' gasto · ' : ' gastos · ') + fmt(soma(sel, x => x.valor)) + ' · custo líquido ' + fmt(soma(sel, custo))));
-  const porDia = [];
-  sel.forEach(x => { const u = porDia[porDia.length - 1]; if (u && u.data === x.data) u.itens.push(x); else porDia.push({ data: x.data, itens: [x] }); });
-  porDia.forEach(d => out.push(glabel(diaLongo(d.data)), lista(d.itens.map(linhaDespesa))));
+  out.push(hint(sel.length + (sel.length === 1 ? ' despesa · ' : ' despesas · ') + fmt(soma(sel, x => x.valor)) + ' · a tua parte ' + fmt(soma(sel, minhaParte))));
+  const grupos = group2(sel, x => x.data);
+  Object.keys(grupos).forEach(d => out.push(glabel(cap(diaLongo(d))), lista(grupos[d].map(linhaDespesa))));
   return out;
 }
+function group2(arr, f) { const g = {}; arr.forEach(x => { (g[f(x)] = g[f(x)] || []).push(x); }); return g; }
 
-function viewGanhos() {
-  if (S.loading && !S.ganhos.length) return carregando();
-  if (!S.ganhos.length) return [vazio('Sem ganhos em ' + mesMin(S.mes) + '.', 'Registar ganho', () => abrirGanho())];
-  const out = [glabel('Total de ' + mesMin(S.mes)), group(h('div', { class: 'hero' }, h('div', { class: 'big pos', text: fmt(soma(S.ganhos, x => x.valor)) })))];
-  out.push(glabel('Lançamentos'), lista(S.ganhos.map(x => h('button', { type: 'button', class: 'lrow', onclick: () => abrirGanho(x) },
-    h('div', { class: 'rmain' },
-      h('div', { class: 'rtitle', text: x.descricao || x.categoria || 'Ganho' }),
-      h('div', { class: 'rsub', text: [diaCurto(x.data), x.categoria, x.fonte === 'notificacao' ? 'Notificação do banco' : null].filter(Boolean).join(' · ') })),
-    h('div', { class: 'rval pos', text: fmt(x.valor) }),
-    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))));
-  return out;
-}
-
-function resetCalc() {
-  const c = S.config || {};
-  const ganhosMes = soma(S.ganhos, x => x.valor);
-  S.calc.eu = c.calc_eu != null ? toInput(c.calc_eu) : (ganhosMes > 0 ? toInput(ganhosMes) : '');
-  S.calc.ela = c.calc_ela != null ? toInput(c.calc_ela) : '';
-  S.calc.init = true;
-}
-function viewCalcular() {
-  if (!S.calc.init) resetCalc();
-  const inV = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.valor, 'aria-label': 'Valor a dividir' });
-  const inEu = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.eu, 'aria-label': 'O meu rendimento' });
-  const inEla = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', value: S.calc.ela, 'aria-label': 'Rendimento ' + DA() });
-  const kEu = h('div', { class: 'k' }), kEla = h('div', { class: 'k' });
-  const rEu = h('div', { class: 'big', 'data-r': 'eu' }), rEla = h('div', { class: 'big', 'data-r': 'ela' });
-  const porque = h('p', { class: 'hint', id: 'calc-porque' });
-  const reg = h('button', { class: 'btn primary', type: 'button', text: 'Registar como gasto partilhado', 'aria-describedby': 'calc-porque' });
-  let s = null;
-  function upd() {
-    S.calc.valor = inV.value; S.calc.eu = inEu.value; S.calc.ela = inEla.value;
-    const a = parseNum(inEu.value), b = parseNum(inEla.value), v = parseNum(inV.value);
-    s = ok(a) && ok(b) && a >= 0 && b >= 0 ? dividirLocal(ok(v) ? v : 0, a, b) : null;
-    const pa = ok(a) && ok(b) && a + b > 0 ? a / (a + b) * 100 : null;
-    kEu.textContent = 'Tu' + (pa != null ? ' · ' + pctTxt(pa) : '');
-    kEla.textContent = ELA() + (pa != null ? ' · ' + pctTxt(100 - pa) : '');
-    rEu.textContent = s ? fmt(s.eu) : '—';
-    rEla.textContent = s ? fmt(s.ela) : '—';
-    reg.disabled = !s;
-    // botão desativado explica porquê
-    porque.textContent = s ? 'Ao registar, o gasto entra pelo total e a parte ' + DA() + ' fica a receber.'
-      : 'Indica o valor da conta e os dois rendimentos para poder registar.';
+// ===================== Em comum =====================
+const textoSaldo = v => (v > 0.005 ? ELA() + ' deve-te' : v < -0.005 ? 'Deves a ' + ELA() : 'Estão acertados');
+function viewComum() {
+  if (S.loading && !S.casal && !S.despesas.length) return carregando();
+  if (!S.casal) return blocoCriarCasal();
+  const c = S.casal, v = Number(c.eu.saldo), outro = c.outro;
+  const out = [group(h('div', { class: 'hero' },
+    h('div', { class: 'k', text: textoSaldo(v) }),
+    h('div', { class: 'big' + (v < -0.005 ? ' neg' : v > 0.005 ? ' pos' : ''), text: fmt(Math.abs(v)) }),
+    Math.abs(v) > 0.005 ? h('button', { type: 'button', class: 'btn primary', text: 'Acertar contas', onclick: () => abrirAcerto(null, v) }) : null))];
+  out.push(hint('Conta só o que já está pago. Cada despesa em comum divide-se pela percentagem que ficou nela.'));
+  out.push(glabel('Divisão'), group(
+    kv(c.eu.nome + ' (tu)', pctTxt(Number(c.eu.pct))),
+    kv(outro ? outro.nome : ELA(), pctTxt(Number(outro ? outro.pct : 100 - c.eu.pct))),
+    grow('', h('button', { type: 'button', class: 'link b', text: 'Alterar divisão', onclick: abrirDivisao }))));
+  if (outro && !outro.user_id) out.push(glabel(ELA() + ' ainda não entrou na app'), group(
+    h('div', { class: 'pad' }, h('p', { class: 'k', style: 'margin:0 0 10px', text: 'Gera um código e manda-o a ' + ELA() + '. Cria conta na app e escreve o código em «Em comum».' }),
+      h('button', { type: 'button', class: 'btn', text: 'Gerar código de convite', onclick: convidar }))));
+  const comuns = S.despesas.filter(comum);
+  out.push(glabel('Em comum em ' + mesMin(S.mes)));
+  out.push(comuns.length ? lista(comuns.map(linhaDespesa)) : vazio('Sem despesas em comum este mês.', 'Registar despesa em comum', () => abrirDespesa(null, { comum: true })));
+  if (S.acertos.length) {
+    out.push(glabel('Acertos'), lista(S.acertos.map(a => {
+      const recebi = a.para_membro === c.eu.membro_id;
+      return h('button', { type: 'button', class: 'lrow', onclick: () => abrirAcerto(a) },
+        h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: recebi ? ELA() + ' pagou-te' : 'Pagaste a ' + ELA() }),
+          h('div', { class: 'rsub', text: [diaCurto(a.data), a.nota].filter(Boolean).join(' · ') })),
+        h('div', { class: 'rval' + (recebi ? ' pos' : ''), text: fmt(a.valor) }),
+        h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
+    })));
   }
-  [inV, inEu, inEla].forEach(i => i.addEventListener('input', upd));
-  inEu.addEventListener('change', () => { const v = parseNum(inEu.value); if (v === null || (ok(v) && v >= 0)) guardarConfig({ calc_eu: v }, true); });
-  inEla.addEventListener('change', () => { const v = parseNum(inEla.value); if (v === null || (ok(v) && v >= 0)) guardarConfig({ calc_ela: v }, true); });
-  reg.addEventListener('click', () => { if (s) abrirDespesa(null, { valor: parseNum(inV.value), partilhada: true, parte_dela: s.ela }); });
-  upd();
+  return out;
+}
+function blocoCriarCasal() {
+  const meu = h('input', { class: 'ginput', type: 'text', maxlength: '40', autocapitalize: 'words', 'aria-label': 'O teu nome', placeholder: 'Gonçalo', value: '' });
+  const dela = h('input', { class: 'ginput', type: 'text', maxlength: '40', autocapitalize: 'words', 'aria-label': 'Nome dela', placeholder: 'Bia', value: (S.config && S.config.nome_ela) || '' });
+  const pct = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', maxlength: '3', 'aria-label': 'A tua parte em percentagem', placeholder: '50', value: '50' });
+  const cod = h('input', { class: 'ginput', type: 'text', maxlength: '8', autocapitalize: 'characters', autocorrect: 'off', spellcheck: 'false', 'aria-label': 'Código de convite', placeholder: 'Ex.: 7KQ2XA' });
+  const e1 = h('p', { class: 'lerr', role: 'alert', hidden: true }), e2 = h('p', { class: 'lerr', role: 'alert', hidden: true });
+  const falha = (el, campo, m) => { el.textContent = m; el.hidden = false; if (campo) { campo.setAttribute('aria-invalid', 'true'); campo.focus(); } };
+  const criar = h('button', { type: 'button', class: 'btn primary', text: 'Criar conta em comum', onclick: async () => {
+    e1.hidden = true;
+    const p = parseNum(pct.value);
+    if (!ok(p) || p < 0 || p > 100) return falha(e1, pct, 'A tua parte tem de ser entre 0 e 100%.');
+    criar.disabled = true;
+    try { await q(sb.rpc('criar_casal', { p_meu_nome: meu.value.trim() || 'Eu', p_nome_outro: dela.value.trim() || 'Bia', p_meu_pct: p })); await recarregar(); toast('Conta em comum criada'); }
+    catch (e) { falha(e1, null, traduzErro(e)); }
+    finally { criar.disabled = false; }
+  } });
+  const entrarC = h('button', { type: 'button', class: 'btn', text: 'Entrar com o código', onclick: async () => {
+    e2.hidden = true;
+    if (!cod.value.trim()) return falha(e2, cod, 'Escreve o código que recebeste.');
+    entrarC.disabled = true;
+    try { await q(sb.rpc('aceitar_convite', { p_codigo: cod.value.trim() })); await Promise.all([recarregar(), carregarFixas()]); render(); toast('Entraste na conta em comum'); }
+    catch (e) { falha(e2, cod, traduzErro(e)); }
+    finally { entrarC.disabled = false; }
+  } });
   return [
-    glabel('Valor da conta'),
-    group(h('div', { class: 'pad' }, inV)),
-    h('div', { class: 'duo' }, group(h('div', { class: 'hero' }, kEu, rEu)), group(h('div', { class: 'hero' }, kEla, rEla))),
-    glabel('Rendimentos líquidos'),
-    group(grow('Eu', inEu), grow(ELA(), inEla)),
-    hint('A divisão é proporcional ao que cada um ganha. Os rendimentos ficam guardados para a próxima vez.'),
-    reg,
-    porque
+    group(h('div', { class: 'hero' }, h('p', { class: 'k', style: 'margin:0', text: 'Regista as despesas da casa com a Bia: os dois veem as mesmas, cada uma dividida pela percentagem que combinarem, e a app diz quem deve a quem. As tuas despesas pessoais continuam só tuas.' }))),
+    glabel('Criar'), group(grow('O teu nome', meu), grow('Nome dela', dela), grow('A tua parte (%)', pct)), e1,
+    h('div', { class: 'pad0' }, criar),
+    glabel('Recebeste um código?'), group(grow('Código', cod)), e2,
+    h('div', { class: 'pad0' }, entrarC)
   ];
 }
+async function convidar() {
+  try {
+    const cod = await q(sb.rpc('gerar_convite'));
+    let s;
+    s = sheet('Convidar ' + ELA(), [
+      h('div', { class: 'codigo', text: cod }),
+      h('p', { class: 'split', text: 'válido durante 7 dias' }),
+      group(h('ol', { class: 'steps' },
+        h('li', null, 'Ela abre ', h('b', { text: 'goncalopedrosapinto.github.io/gpp-dashboard' }), ' no iPhone e toca em «Criar conta».'),
+        h('li', null, 'Depois de entrar, vai a ', h('b', { text: 'Em comum' }), ' e escreve este código.'),
+        h('li', null, 'A partir daí veem as mesmas despesas em comum. As pessoais continuam privadas.'))),
+      h('button', { type: 'button', class: 'btn primary', text: 'Copiar mensagem', onclick: () => copiar('Entra na nossa conta de despesas: abre https://goncalopedrosapinto.github.io/gpp-dashboard/ , cria conta e em «Em comum» escreve o código ' + cod) })
+    ], null);
+  } catch (e) { erro(e); }
+}
+function abrirDivisao() {
+  const c = S.casal;
+  const pct = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', 'aria-label': 'A tua parte em percentagem', value: String(Number(c.eu.pct)).replace('.', ',') });
+  const info = h('div', { class: 'split', 'aria-live': 'polite' });
+  const upd = () => { const p = parseNum(pct.value); info.textContent = ok(p) && p >= 0 && p <= 100 ? '% tua · ' + ELA() + ' fica com ' + pctTxt(r2(100 - p)) : '% tua'; };
+  pct.addEventListener('input', upd); upd();
+  const nome = c.outro && !c.outro.user_id ? h('input', { class: 'ginput', type: 'text', maxlength: '40', 'aria-label': 'Nome dela', value: c.outro.nome }) : null;
+  let s;
+  s = sheet('Divisão', [pct, info, nome ? group(grow('Nome dela', nome)) : null,
+    hint('É a divisão por defeito das novas despesas em comum. As que já existem mantêm a percentagem com que foram registadas.')], async () => {
+    const p = parseNum(pct.value);
+    if (!ok(p) || p < 0 || p > 100) return s.erro('Escreve uma percentagem entre 0 e 100.', pct);
+    await q(sb.rpc('definir_divisao', { p_meu_pct: p, p_nome_outro: nome ? nome.value.trim() : null }));
+    await recarregar(); toast('Divisão guardada');
+  });
+  pct.focus(); pct.select();
+}
+function abrirAcerto(x, saldo) {
+  const c = S.casal, novo = !x;
+  const recebiIni = x ? x.para_membro === c.eu.membro_id : saldo > 0;
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor do acerto', 'aria-required': 'true', value: x ? toInput(x.valor) : (ok(saldo) ? toInput(Math.abs(saldo)) : '') });
+  const dir = escolha([[ELA() + ' pagou-me', 'recebi'], ['Paguei a ' + ELA(), 'paguei']], recebiIni ? 'recebi' : 'paguei', 'Quem pagou a quem');
+  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : hojeISO(), 'aria-label': 'Data', 'aria-required': 'true' });
+  const nota = h('input', { class: 'ginput', type: 'text', maxlength: '120', placeholder: 'Opcional (ex.: MB Way)', 'aria-label': 'Nota', value: x ? (x.nota || '') : '' });
+  let s;
+  s = sheet(novo ? 'Acertar contas' : 'Editar acerto', [valor, h('div', { class: 'split', text: 'transferido entre vocês' }),
+    group(h('div', { class: 'pad' }, dir.el)), group(grow('Data', data), grow('Nota', nota)),
+    novo ? null : botaoApagar('Apagar acerto', 'Apagar este acerto?', 'O que cada um deve volta a contar com este valor.', async () => {
+      await q(sb.from('acertos').delete().eq('id', x.id)); s.fechar(); await recarregar(); toast('Acerto apagado');
+    }, () => s)], async () => {
+    const v = validarValor(s, valor); if (v === null) return false;
+    if (!data.value) return s.erro('Indica a data.', data);
+    const recebi = dir.valor() === 'recebi', eu = c.eu.membro_id, ela = c.outro.membro_id;
+    const payload = { casal_id: c.id, de_membro: recebi ? ela : eu, para_membro: recebi ? eu : ela, valor: v, data: data.value, nota: nota.value.trim() || null };
+    if (novo) await q(sb.from('acertos').insert(payload)); else await q(sb.from('acertos').update(payload).eq('id', x.id));
+    await recarregar(); toast(novo ? 'Acerto registado' : 'Acerto atualizado');
+  });
+  if (novo) valor.focus();
+}
 
+// ===================== Fixas =====================
 function linhaFixa(x) {
-  const transf = x.para_conta_id != null;
   return h('button', { type: 'button', class: 'lrow' + (x.ativa ? '' : ' off'), onclick: () => abrirFixa(x) },
     h('div', { class: 'rmain' },
       h('div', { class: 'rtitle', text: x.nome }),
-      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, transf ? 'Transferência para ' + (nomeConta(x.para_conta_id) || '—') : null,
-        x.variavel ? 'Variável' : null, x.debito_direto ? 'Débito direto' : null,
-        x.partilhada ? (x.parte_dela != null ? ELA() + ' paga ' + fmt(x.parte_dela) : 'Partilhada') : null,
+      h('div', { class: 'rsub', text: ['Dia ' + x.dia_vencimento, comum(x) ? 'Comum · tua parte ' + fmt(minhaParte(x)) : null,
+        x.variavel ? 'Variável' : null, x.debito_direto ? 'Débito direto' : null, x.para_conta_id != null ? 'Transferência' : null,
         x.ativa ? null : 'Pausada'].filter(Boolean).join(' · ') })),
     h('div', { class: 'rval', text: (x.variavel ? '≈ ' : '') + fmt(x.valor) }),
     h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
 }
 function viewFixas() {
-  const ativas = S.fixas.filter(x => x.ativa);
-  const gastosF = ativas.filter(x => x.para_conta_id == null), transfF = ativas.filter(x => x.para_conta_id != null);
-  const total = soma(gastosF, x => x.valor);
-  const partesDela = soma(gastosF, parte);
+  const ativas = S.fixas.filter(x => x.ativa && x.para_conta_id == null);
+  if (!S.fixas.length) return [vazio('Ainda não tens despesas fixas: renda, água, luz, ginásio…', 'Adicionar despesa fixa', () => abrirFixa())];
+  const temVar = ativas.some(x => x.variavel) ? '≈ ' : '';
   const out = [glabel('Por mês'), group(
-    kv('Gastos fixos', (gastosF.some(x => x.variavel) ? '≈ ' : '') + fmt(total), 'strong'),
-    partesDela > 0 ? kv('Parte ' + DA(), '− ' + fmt(partesDela), 'pos') : null,
-    partesDela > 0 ? kv('O teu custo fixo', fmt(r2(total - partesDela))) : null,
-    transfF.length ? kv('Transferências entre contas', fmt(soma(transfF, x => x.valor))) : null
-  ), transfF.length ? hint('As transferências (ex.: pagar o cartão de crédito) não contam como gasto: o gasto é o que foi comprado com o cartão.') : null];
-  if (!S.fixas.length) { out.push(glabel('Despesas fixas'), vazio('Ainda não tens despesas fixas: crédito, água, ginásio…', 'Adicionar despesa fixa', () => abrirFixa())); return out; }
-  if (!S.contas.length) {
-    out.push(glabel('Despesas fixas'), lista(S.fixas.map(linhaFixa)));
-  } else {
-    // Agrupadas pela conta de onde sai o dinheiro, como no extrato
-    const grupos = S.contas.map(c => ({ c: c, itens: S.fixas.filter(x => (contaDe(x.conta_id) || {}).conta_id === c.conta_id) })).filter(g => g.itens.length);
-    grupos.forEach(g => {
-      const t = soma(g.itens.filter(x => x.ativa), x => x.valor);
-      out.push(glabel(g.c.nome + ' · ' + fmt(t)), lista(g.itens.map(linhaFixa)));
-    });
-  }
-  out.push(hint('Cada fixa entra sozinha todos os meses. Se apagares o lançamento deste mês, não volta a aparecer.'));
+    kv('Total', temVar + fmt(soma(ativas, x => x.valor)), 'strong'),
+    ativas.some(comum) ? kv('A tua parte', temVar + fmt(soma(ativas, minhaParte))) : null)];
+  const minhas = S.fixas.filter(x => !comum(x)), comuns = S.fixas.filter(comum);
+  if (comuns.length) out.push(glabel('Em comum'), lista(comuns.map(linhaFixa)));
+  if (minhas.length) out.push(glabel(comuns.length ? 'Só minhas' : 'Despesas fixas'), lista(minhas.map(linhaFixa)));
+  out.push(hint('Cada fixa entra todos os meses como «por pagar» no dia certo, e a agenda do iPhone avisa-te na véspera. Se apagares a deste mês, não volta a aparecer.'));
   return out;
 }
 
@@ -560,36 +569,17 @@ function linhaCopiar(label, valor, mostrar) {
 }
 function viewAjustes() {
   const c = S.config || {};
-  const nome = h('input', { class: 'ginput', type: 'text', placeholder: 'Bia', maxlength: '40', value: c.nome_ela || '', autocapitalize: 'words', 'aria-label': 'Nome dela' });
-  nome.addEventListener('keydown', e => { if (e.key === 'Enter') nome.blur(); });
-  nome.addEventListener('change', () => guardarConfig({ nome_ela: nome.value.trim() || null }));
-  const sw = h('input', { type: 'checkbox', role: 'switch', class: 'switch', checked: !!c.apple_pay_partilhada_default, 'aria-label': 'Novos gastos Apple Pay são partilhados' });
-  sw.addEventListener('change', () => guardarConfig({ apple_pay_partilhada_default: sw.checked }));
   const url = SUPABASE_URL + '/rest/v1/rpc/registar_apple_pay';
   const tk = c.token_atalho || '';
   return [
-    glabel('Contas partilhadas com'),
-    group(grow('Nome', nome)),
-
-    glabel('Apple Pay'),
-    group(grow('Novos gastos são partilhados', sw)),
-    hint('Quando corriges um gasto Apple Pay, o comerciante fica memorizado e os próximos já entram certos.'),
-
     glabel('Atalho do iPhone · registo automático'),
     group(
-      linhaCopiar('URL', url, url.replace('https://', '')),
+      linhaCopiar('URL Wallet', url, 'rpc/registar_apple_pay'),
       linhaCopiar('URL banco', SUPABASE_URL + '/rest/v1/rpc/registar_notificacao', 'rpc/registar_notificacao'),
       linhaCopiar('Chave', SUPABASE_KEY, SUPABASE_KEY.slice(0, 18) + '…'),
       linhaCopiar('Token', tk, tk ? tk.slice(0, 8) + '…' + tk.slice(-4) : '—')
     ),
-    group(h('ol', { class: 'steps' },
-      h('li', null, 'Atalhos › ', h('b', { text: 'Automação' }), ' › + › ', h('b', { text: 'Carteira' }), '. Escolhe os teus cartões e ativa ', h('b', { text: 'Executar imediatamente' }), '.'),
-      h('li', null, 'Nova automação vazia › ação ', h('b', { text: 'Obter conteúdo do URL' }), '. Cola o URL.'),
-      h('li', null, 'Método ', h('b', { text: 'POST' }), '. Cabeçalhos: ', h('b', { text: 'apikey' }), ' = Chave; ', h('b', { text: 'Content-Type' }), ' = application/json.'),
-      h('li', null, 'Corpo do pedido ', h('b', { text: 'JSON' }), ', 4 campos de texto: ', h('b', { text: 'token' }), ' = Token; ', h('b', { text: 'valor' }), ' = Entrada do atalho › Montante; ', h('b', { text: 'comerciante' }), ' = › Comerciante; ', h('b', { text: 'cartao' }), ' = › Nome.'),
-      h('li', null, 'Paga algo pequeno e confirma em Gastos › Por rever.')
-    )),
-    hint('O token é a tua chave pessoal: não o partilhes. Quem o tiver só consegue adicionar gastos, não ler os teus dados.'),
+    hint('As compras que chegam pela Wallet ou pelo banco entram como pagas e só tuas, em «Por rever». Abre-as para pôr a categoria ou passá-las para «em comum». O token é a tua chave pessoal: não o partilhes.'),
 
     ...blocoFeeds(),
 
@@ -606,456 +596,147 @@ function viewAjustes() {
 
 // ===================== Folhas de edição =====================
 const interruptor = (checked, label) => h('input', { type: 'checkbox', role: 'switch', class: 'switch', checked: !!checked, 'aria-label': label });
-
-function blocoPartilha(st, valorInput, comRecebido) {
-  // Liga/desliga partilha + parte dela (+ já recebi)
-  const sw = interruptor(st.partilhada, 'Partilhada');
-  const inParte = campoValor(st.parte_dela, 'Parte ' + DA(), { placeholder: 'quanto paga' });
-  const metade = h('button', { type: 'button', class: 'link small2', text: 'Metade', 'aria-label': 'Metade do valor como parte ' + DA() });
-  const swRec = interruptor(st.recebido, 'Já recebi');
-  const rowParte = grow('Parte ' + DA(), h('div', { class: 'inline' }, inParte, metade));
-  const rowRec = comRecebido ? grow('Já recebi', swRec) : null;
-  const info = h('div', { class: 'split', 'aria-live': 'polite' });
-  function draw() {
-    rowParte.hidden = !st.partilhada;
-    if (rowRec) rowRec.hidden = !st.partilhada;
-    const v = parseNum(valorInput.value), p = parseNum(inParte.value);
-    const mostra = st.partilhada && ok(v) && v > 0 && ok(p) && p > 0;
-    info.hidden = !mostra;
-    if (mostra) info.textContent = 'Custa-te ' + fmt(r2(v - p)) + ' · ' + ELA() + ' paga ' + fmt(p);
-  }
-  sw.addEventListener('change', () => { st.partilhada = sw.checked; draw(); });
-  swRec.addEventListener('change', () => { st.recebido = swRec.checked; });
-  inParte.addEventListener('input', draw);
-  valorInput.addEventListener('input', draw);
-  metade.addEventListener('click', () => { const v = parseNum(valorInput.value); if (ok(v) && v > 0) { inParte.value = toInput(r2(v / 2)); draw(); } });
-  draw();
-  return {
-    info: info,
-    campo: inParte,
-    group: group(grow('Partilhada com ' + ELA(), sw), rowParte, rowRec),
-    ler: () => {
-      if (!st.partilhada) return { partilhada: false, parte_dela: null, recebido: false };
-      const p = parseNum(inParte.value);
-      return { partilhada: true, parte_dela: ok(p) ? p : null, recebido: comRecebido ? !!st.recebido : false, invalido: p !== null && (!ok(p) || p < 0) };
-    }
-  };
-}
-// Validações comuns: devolvem a mensagem de erro (ou null)
 function validarValor(s, campo) {
   const v = parseNum(campo.value);
   if (!ok(v) || v <= 0) { s.erro('Indica um valor maior que zero.', campo); return null; }
   return v;
 }
-function validarPartilha(s, part, v) {
-  const p = part.ler();
-  if (p.invalido) { s.erro('A parte ' + DA() + ' tem de ser um valor válido.', part.campo); return null; }
-  if (p.parte_dela != null && p.parte_dela > v) { s.erro('A parte ' + DA() + ' não pode ser maior que o total.', part.campo); return null; }
-  return p;
+// Bloco "em comum": quem pagou e a tua parte (%) — devolve os campos para gravar
+function blocoComum(x, valorInput, preset) {
+  const c = S.casal;
+  if (!c) return null;
+  const ligado = x ? comum(x) : !!preset.comum;
+  const sw = interruptor(ligado, 'Em comum com ' + ELA());
+  const quem = escolha([['Eu', 'eu'], [ELA(), 'outro']], x && comum(x) && !pagouEu(x) ? 'outro' : 'eu', 'Quem pagou');
+  const pctIni = x && comum(x) ? pctEu(x) : Number(c.eu.pct);
+  const pct = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', maxlength: '6', 'aria-label': 'A tua parte em percentagem', value: String(pctIni).replace('.', ',') });
+  const info = h('div', { class: 'split', 'aria-live': 'polite' });
+  const rQuem = h('div', { class: 'pad' }, h('div', { class: 'glab', style: 'margin-bottom:8px', text: 'Quem pagou' }), quem.el);
+  const rPct = grow('A tua parte (%)', pct);
+  const draw = () => {
+    rQuem.hidden = rPct.hidden = !sw.checked;
+    const v = parseNum(valorInput.value), p = parseNum(pct.value);
+    info.hidden = !(sw.checked && ok(v) && v > 0 && ok(p) && p >= 0 && p <= 100);
+    if (!info.hidden) info.textContent = 'Tu ' + fmt(r2(v * p / 100)) + ' · ' + ELA() + ' ' + fmt(r2(v - r2(v * p / 100)));
+  };
+  [sw, pct, valorInput].forEach(el => el.addEventListener(el === sw ? 'change' : 'input', draw));
+  draw();
+  return {
+    info: info,
+    group: group(grow('Em comum com ' + ELA(), sw), rQuem, rPct),
+    ler: s => {
+      if (!sw.checked) return { casal_id: null, pago_por_membro: null, pct_m1: null };
+      const p = parseNum(pct.value);
+      if (!ok(p) || p < 0 || p > 100) { s.erro('A tua parte tem de ser entre 0 e 100%.', pct); return null; }
+      const euM1 = c.eu.ordem === 1;
+      return { casal_id: c.id, pago_por_membro: quem.valor() === 'eu' ? c.eu.membro_id : c.outro.membro_id, pct_m1: euM1 ? p : r2(100 - p) };
+    }
+  };
 }
 
 function abrirDespesa(x, preset) {
   const novo = !x; preset = preset || {};
-  const st = {
-    categoria: x ? x.categoria : null,
-    partilhada: x ? !!x.partilhada : !!preset.partilhada,
-    parte_dela: x ? x.parte_dela : (ok(preset.parte_dela) ? preset.parte_dela : null),
-    recebido: x ? !!x.recebido : false
-  };
+  const st = { categoria: x ? x.categoria : null };
   const dataDefault = S.mes === mesAtual() ? hojeISO() : S.mes;
   const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor', 'aria-required': 'true',
     value: x ? toInput(x.valor) : (ok(preset.valor) ? toInput(preset.valor) : '') });
   const desc = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', 'aria-label': 'Descrição',
     placeholder: x && x.comerciante ? x.comerciante : 'Ex.: Jantar', value: x ? (x.descricao || '') : '' });
   const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : dataDefault, 'aria-label': 'Data', 'aria-required': 'true' });
-  const part = blocoPartilha(st, valor, true);
-  const contaSel = seletorConta(x ? x.conta_id : null);
+  const swPago = interruptor(x ? (x.pago || preset.marcarPaga) : true, 'Já está paga');
+  let tocouPago = !!x;
+  swPago.addEventListener('change', () => { tocouPago = true; });
+  data.addEventListener('change', () => { if (!tocouPago && data.value) swPago.checked = data.value <= hojeISO(); });
+  const bc = blocoComum(x, valor, preset);
 
   let origem = null;
   if (x && x.origem === 'apple_pay') origem = [fonteTxt(x), x.cartao, x.comerciante].filter(Boolean).join(' · ');
-  if (x && x.origem === 'recorrente') origem = x.estimado ? 'Valor estimado pela média das últimas faturas. Escreve o valor real e guarda.' : 'Lançado a partir de uma despesa fixa';
+  if (x && x.origem === 'recorrente') origem = x.estimado ? 'Valor estimado pela média das últimas faturas. Escreve o valor real e guarda.' : 'Lançada a partir de uma despesa fixa';
+  if (x && S.user && x.owner !== S.user.id) origem = 'Registada por ' + ELA() + (origem ? ' · ' + origem : '');
   const titulo = x ? (x.descricao || x.comerciante || 'Sem descrição') : '';
 
   let s;
   const conteudo = [
-    valor, part.info,
+    valor, bc ? bc.info : null,
     origem ? hint(origem, x && x.estimado ? 'center warn' : 'center') : null,
-    group(grow('Descrição', desc), grow('Data', data), contaSel ? contaSel.row : null),
+    group(grow('Descrição', desc), grow('Data', data), grow('Já está paga', swPago)),
+    bc ? bc.group : null,
     glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
-    part.group,
-    x && x.origem === 'apple_pay' && x.comerciante ? h('p', { class: 'hint', style: 'margin-top:-10px', text: 'A categoria e a partilha ficam memorizadas para «' + x.comerciante + '».' }) : null,
-    novo ? null : botaoApagar('Apagar gasto', 'Apagar este gasto?', '«' + titulo + '» · ' + fmt(x.valor) + '. Não dá para desfazer.', async () => {
+    x && x.origem === 'apple_pay' && x.comerciante ? h('p', { class: 'hint', style: 'margin-top:-10px', text: 'A categoria fica memorizada para «' + x.comerciante + '».' }) : null,
+    novo ? null : botaoApagar('Apagar despesa', 'Apagar esta despesa?', '«' + titulo + '» · ' + fmt(x.valor) + (comum(x) ? '. Desaparece também para ' + ELA() : '') + '. Não dá para desfazer.', async () => {
       await q(sb.from('despesas').delete().eq('id', x.id));
-      s.fechar(); await recarregar(); toast('Gasto apagado');
+      s.fechar(); await recarregar(); toast('Despesa apagada');
     }, () => s)
   ];
-  s = sheet(novo ? 'Novo gasto' : x.estimado ? 'Confirmar fatura' : 'Editar gasto', conteudo, async () => {
+  const tit = preset.marcarPaga ? 'Confirmar e pagar' : novo ? (preset.comum ? 'Nova despesa em comum' : 'Nova despesa') : x.estimado ? 'Confirmar fatura' : 'Editar despesa';
+  s = sheet(tit, conteudo, async () => {
     const v = validarValor(s, valor); if (v === null) return false;
     if (!data.value) return s.erro('Indica a data.', data);
-    const p = validarPartilha(s, part, v); if (!p) return false;
-    const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria,
-      partilhada: p.partilhada, parte_dela: p.parte_dela, recebido: p.recebido, estimado: false };
-    if (contaSel) payload.conta_id = contaSel.ler();
+    const cc = bc ? bc.ler(s) : { casal_id: x ? x.casal_id : null }; if (!cc) return false;
+    const payload = Object.assign({ valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria, pago: swPago.checked, estimado: false }, cc);
     if (novo) await q(sb.from('despesas').insert(payload));
     else await q(sb.from('despesas').update(payload).eq('id', x.id));
     const mesD = payload.data.slice(0, 8) + '01';
+    if (x && x.estimado) await carregarFixas();
     await recarregar();
-    if (x && x.estimado) await carregarFixas();   // a estimativa da fixa mudou
-    toast(x && x.estimado ? 'Valor confirmado' : mesD === S.mes ? 'Guardado' : 'Guardado em ' + nomeMes(mesD));
+    toast(x && x.estimado ? 'Valor confirmado' + (payload.pago ? ' · paga' : '') : mesD === S.mes ? 'Guardado' : 'Guardado em ' + nomeMes(mesD));
   });
   if (novo && !ok(preset.valor)) valor.focus();
   else if (x && x.estimado) { valor.focus(); valor.select(); }
 }
 
-function abrirGanho(x) {
-  const novo = !x;
-  const st = { categoria: x ? x.categoria : 'Salário' };
-  const valor = h('input', { class: 'valorin pos', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor do ganho', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
-  const desc = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Salário de novembro', 'aria-label': 'Descrição', value: x ? (x.descricao || '') : '' });
-  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : (S.mes === mesAtual() ? hojeISO() : S.mes), 'aria-label': 'Data', 'aria-required': 'true' });
-  const contaSel = seletorConta(x ? x.conta_id : null);
-  let s;
-  s = sheet(novo ? 'Novo ganho' : 'Editar ganho', [
-    valor, h('div', { class: 'split', text: 'líquido' }),
-    group(grow('Descrição', desc), grow('Data', data), contaSel ? contaSel.row : null),
-    glabel('Tipo', 'h3'),
-    group(h('div', { class: 'pad' }, chips(CAT_GANHOS, st, 'Tipo de ganho'))),
-    novo ? null : botaoApagar('Apagar ganho', 'Apagar este ganho?', '«' + (x.descricao || x.categoria || 'Ganho') + '» · ' + fmt(x.valor) + '. Não dá para desfazer.', async () => {
-      await q(sb.from('ganhos').delete().eq('id', x.id));
-      s.fechar(); await recarregar(); toast('Ganho apagado');
-    }, () => s)
-  ], async () => {
-    const v = validarValor(s, valor); if (v === null) return false;
-    if (!data.value) return s.erro('Indica a data.', data);
-    const payload = { valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria };
-    if (contaSel) payload.conta_id = contaSel.ler();
-    if (novo) await q(sb.from('ganhos').insert(payload));
-    else await q(sb.from('ganhos').update(payload).eq('id', x.id));
-    S.calc.init = false;
-    const mesG = payload.data.slice(0, 8) + '01';
-    await recarregar();
-    toast(mesG === S.mes ? 'Ganho guardado' : 'Guardado em ' + nomeMes(mesG));
-  });
-  if (novo) valor.focus();
-}
-
 function abrirFixa(x) {
   const novo = !x;
-  const st = { categoria: x ? x.categoria : null, partilhada: x ? !!x.partilhada : false, parte_dela: x ? x.parte_dela : null, ativa: x ? !!x.ativa : true };
-  const podeTransf = S.contas.length >= 2;
+  const st = { categoria: x ? x.categoria : null, ativa: x ? !!x.ativa : true };
   const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor mensal', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
-  const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Ginásio', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
+  const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', placeholder: 'Ex.: Renda', 'aria-label': 'Nome', 'aria-required': 'true', value: x ? x.nome : '' });
   const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia do pagamento', 'aria-required': 'true', value: x ? String(x.dia_vencimento) : '' });
   const swDeb = interruptor(x ? x.debito_direto : false, 'Débito direto');
   const swVar = interruptor(x ? x.variavel : false, 'Valor variável');
-  const rVar = grow('Valor variável', swVar);
   const splitMes = h('div', { class: 'split', text: 'por mês' });
-  const hintVar = hint('Para contas que mudam todos os meses (água, luz): entra com esta estimativa e fica «por confirmar» até escreveres o valor da fatura. Depois, a estimativa passa a ser a média das últimas 3 faturas.');
-  const drawVar = () => {
-    const v = swVar.checked && tipo !== 'transferencia';
-    splitMes.textContent = v ? 'estimativa por mês' : 'por mês';
-    valor.setAttribute('aria-label', v ? 'Valor estimado por mês' : 'Valor mensal');
-    hintVar.hidden = !v;
-  };
-  hintVar.style.margin = '-6px 16px 18px';
-  swVar.addEventListener('change', drawVar);
   const rDia = grow('Dia do pagamento', dia);
   const drawDeb = () => { const t = swDeb.checked ? 'Dia do débito' : 'Dia do pagamento'; rDia.firstChild.textContent = t; dia.setAttribute('aria-label', t); };
-  swDeb.addEventListener('change', drawDeb); drawDeb();
-  const contaSel = seletorConta(x ? x.conta_id : null);
-  // Transferência: de / para
-  const p = contaPrincipal();
-  const de = podeTransf ? selectConta(x && x.conta_id != null ? x.conta_id : (p ? p.conta_id : null), 'De') : null;
-  const outra = S.contas.find(c => !p || c.conta_id !== p.conta_id);
-  const para = podeTransf ? selectConta(x && x.para_conta_id != null ? x.para_conta_id : (outra ? outra.conta_id : null), 'Para') : null;
-  const grpTransf = podeTransf ? group(grow('De', de), grow('Para', para)) : null;
-  const part = blocoPartilha(st, valor, false);
-  const grpCat = [glabel('Categoria', 'h3'), group(h('div', { class: 'pad' }, chips(CATEGORIAS, st)))];
-  const wrapCat = h('div', null, grpCat);
-  const wrapPart = h('div', null, part.group);
-  let tipo = x && x.para_conta_id != null ? 'transferencia' : 'despesa';
-  const drawTipo = t => {
-    tipo = t;
-    const tr = t === 'transferencia';
-    if (grpTransf) grpTransf.hidden = !tr;
-    if (contaSel) contaSel.row.hidden = tr;
-    wrapCat.hidden = tr; wrapPart.hidden = tr; part.info.hidden = tr || part.info.hidden;
-    rVar.hidden = tr;
-    nome.placeholder = tr ? 'Ex.: Pagamento Caetano GO' : 'Ex.: Ginásio';
-    drawVar();
-  };
-  const escTipo = podeTransf ? escolha([['Despesa', 'despesa'], ['Transferência', 'transferencia']], tipo, 'Tipo de fixa', false, drawTipo) : null;
+  const drawVar = () => { splitMes.textContent = swVar.checked ? 'estimativa por mês' : 'por mês'; valor.setAttribute('aria-label', swVar.checked ? 'Valor estimado por mês' : 'Valor mensal'); };
+  swDeb.addEventListener('change', drawDeb); swVar.addEventListener('change', drawVar); drawDeb(); drawVar();
+  const bc = blocoComum(x, valor, {});
   const swAtiva = interruptor(st.ativa, 'Ativa');
   swAtiva.addEventListener('change', () => { st.ativa = swAtiva.checked; });
   let s;
   const conteudo = [
-    valor, part.info, splitMes,
-    escTipo ? group(h('div', { class: 'pad' }, escTipo.el)) : null,
-    group(grow('Nome', nome), rVar, grow('Débito direto', swDeb), rDia, contaSel ? contaSel.row : null),
-    grpTransf,
-    h('p', { class: 'hint', style: 'margin:-10px 16px 18px', text: 'Com débito direto o banco cobra sozinho nesse dia: a agenda avisa-te na véspera para confirmares o saldo.' }),
-    hintVar,
-    wrapCat,
-    wrapPart,
+    valor, bc ? bc.info : null, splitMes,
+    group(grow('Nome', nome), rDia, grow('Débito direto', swDeb), grow('Valor variável', swVar)),
+    hint('Entra todos os meses como «por pagar» e a agenda do iPhone avisa-te na véspera. Com valor variável (água, luz) entra com uma estimativa até escreveres o valor da fatura.'),
+    bc ? bc.group : null,
+    glabel('Categoria', 'h3'), group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
     novo ? null : group(grow('Ativa', swAtiva)),
     novo ? null : botaoApagar('Apagar despesa fixa', 'Apagar «' + x.nome + '»?', 'Deixa de entrar nos próximos meses. Os meses já lançados mantêm-se.', async () => {
       await q(sb.from('despesas_recorrentes').delete().eq('id', x.id));
       s.fechar(); await carregarFixas(); await recarregar(); toast('Fixa apagada');
     }, () => s)
   ];
-  drawTipo(tipo);
   s = sheet(novo ? 'Nova fixa' : 'Editar fixa', conteudo, async () => {
     const v = validarValor(s, valor); if (v === null) return false;
     const n = nome.value.trim();
     if (!n) return s.erro('Dá um nome à despesa.', nome);
     const d = parseInt(dia.value, 10);
     if (!(d >= 1 && d <= 31)) return s.erro('O dia tem de ser entre 1 e 31.', dia);
-    const m = mesAtual();
-    const dataMes = m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m)));
-    let payload;
-    if (tipo === 'transferencia') {
-      if (de.value === para.value) return s.erro('Escolhe duas contas diferentes.', para);
-      const deId = Number(de.value);
-      payload = { nome: n, valor: v, dia_vencimento: d, categoria: null, partilhada: false, parte_dela: null, ativa: st.ativa,
-        debito_direto: swDeb.checked, variavel: false, conta_id: p && deId === p.conta_id ? null : deId, para_conta_id: Number(para.value) };
-    } else {
-      const pp = validarPartilha(s, part, v); if (!pp) return false;
-      payload = { nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, partilhada: pp.partilhada, parte_dela: pp.parte_dela, ativa: st.ativa,
-        debito_direto: swDeb.checked, variavel: swVar.checked, para_conta_id: null };
-      if (contaSel) payload.conta_id = contaSel.ler();
-    }
+    const cc = bc ? bc.ler(s) : { casal_id: x ? x.casal_id : null }; if (!cc) return false;
+    const m = mesAtual(), dataMes = m.slice(0, 8) + pad2(Math.min(d, ultimoDia(m)));
+    const payload = Object.assign({ nome: n, valor: v, dia_vencimento: d, categoria: st.categoria, ativa: st.ativa, debito_direto: swDeb.checked, variavel: swVar.checked }, cc);
     if (novo) await q(sb.from('despesas_recorrentes').insert(payload));
     else {
       await q(sb.from('despesas_recorrentes').update(payload).eq('id', x.id));
-      // atualiza o lançamento deste mês, se já existir
-      if (tipo === 'transferencia') {
-        await q(sb.from('transferencias').update({
-          valor: v, nota: n, data: dataMes, de_conta: payload.conta_id != null ? payload.conta_id : p.conta_id, para_conta: payload.para_conta_id
-        }).eq('recorrente_id', x.id).gte('data', m).lte('data', m.slice(0, 8) + pad2(ultimoDia(m))));
-      } else {
-        const atual = { descricao: n, categoria: st.categoria, partilhada: payload.partilhada, parte_dela: payload.parte_dela, data: dataMes };
-        if (contaSel) atual.conta_id = payload.conta_id;
-        if (!payload.variavel) { atual.valor = v; atual.estimado = false; }
-        await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m));
-        // variável: a estimativa nova só substitui o valor deste mês se a fatura ainda não foi confirmada
-        if (payload.variavel) await q(sb.from('despesas').update({ valor: v }).eq('recorrente_id', x.id).eq('mes', m).eq('estimado', true));
-      }
+      // o lançamento deste mês, se ainda estiver por pagar, acompanha a fixa
+      const atual = Object.assign({ descricao: n, categoria: st.categoria, data: dataMes }, cc);
+      if (!payload.variavel) { atual.valor = v; atual.estimado = false; }
+      await q(sb.from('despesas').update(atual).eq('recorrente_id', x.id).eq('mes', m).eq('pago', false));
+      if (payload.variavel) await q(sb.from('despesas').update({ valor: v }).eq('recorrente_id', x.id).eq('mes', m).eq('estimado', true).eq('pago', false));
     }
     await q(sb.rpc('gerar_recorrentes', { p_mes: m }));
     await carregarFixas();
     await recarregar();
-    toast(novo ? 'Fixa criada · já entrou em ' + mesMin(m) : 'Fixa atualizada');
-  });
-  if (novo) valor.focus();
-}
-
-// ===================== Contas e saldos =====================
-const TIPOS_CONTA = { corrente: 'À ordem', poupanca: 'Poupança', credito: 'Cartão de crédito', refeicao: 'Cartão refeição', outra: 'Outra' };
-const eCredito = c => !!c && c.tipo === 'credito';
-const contaPrincipal = () => S.contas.find(c => c.principal) || null;
-const contaDe = id => (id != null && S.contas.find(c => c.conta_id === id)) || contaPrincipal();
-const nomeConta = id => { const c = contaDe(id); return c ? c.nome : null; };
-// Percorre os próximos pagamentos por data e avisa quando o saldo atual da conta deixa de chegar
-function avisosSaldo(proximos) {
-  if (!S.contas.length) return proximos.map(() => null);
-  const resto = {};
-  // contas: saldo atual · cartões: o que resta do plafond (sem plafond não se avisa)
-  S.contas.forEach(c => { resto[c.conta_id] = eCredito(c) ? (c.disponivel != null ? Number(c.disponivel) : null) : Number(c.saldo_atual); });
-  return proximos.map(x => {
-    const c = contaDe(x.conta_id); if (!c || resto[c.conta_id] == null) return null;
-    resto[c.conta_id] = r2(resto[c.conta_id] - Number(x.valor));
-    if (resto[c.conta_id] >= 0) return null;
-    return eCredito(c) ? 'Plafond do ' + c.nome + ' não chega' : 'Saldo atual da ' + c.nome + ' não chega';
-  });
-}
-
-function selectConta(selecionada, label) {
-  return h('select', { class: 'ginput', 'aria-label': label },
-    S.contas.map(c => h('option', { value: String(c.conta_id), text: c.nome, selected: c.conta_id === selecionada })));
-}
-// Só aparece com 2+ contas; a principal grava-se como "sem conta" (segue a principal)
-function seletorConta(atual) {
-  if (S.contas.length < 2) return null;
-  const p = contaPrincipal();
-  const sel = selectConta(atual != null ? atual : (p ? p.conta_id : null), 'Conta');
-  return { row: grow('Conta', sel), ler: () => { const id = Number(sel.value); return p && id === p.conta_id ? null : id; } };
-}
-
-function blocoDinheiro() {
-  const out = [glabel('O meu dinheiro')];
-  if (!S.contas.length) {
-    out.push(group(h('div', { class: 'hero' },
-      h('p', { class: 'k', style: 'margin:0', text: 'Indica quanto tens hoje em cada conta (e quanto deves em cada cartão de crédito). A partir daí, ganhos e gastos atualizam o saldo sozinhos.' }),
-      h('button', { type: 'button', class: 'btn primary', text: 'Indicar o saldo da conta principal', onclick: () => abrirConta(null) }))));
-    return out;
-  }
-  const dinheiro = S.contas.filter(c => !eCredito(c)), cartoes = S.contas.filter(eCredito);
-  const disponivel = soma(dinheiro, c => c.saldo_atual);
-  const divida = soma(cartoes, c => Math.max(0, -Number(c.saldo_atual)));
-  const prevDisp = soma(dinheiro, c => c.saldo_previsto);
-  out.push(group(h('div', { class: 'hero' },
-    h('div', { class: 'k', text: 'Disponível em ' + dinheiro.length + (dinheiro.length === 1 ? ' conta' : ' contas') }),
-    h('div', { class: 'big' + (disponivel < 0 ? ' neg' : ''), text: fmt(disponivel) }),
-    prevDisp !== disponivel ? h('div', { class: 'k', text: 'Depois das fixas a vencer: ' + fmt(prevDisp) }) : null),
-    cartoes.length ? kv('Dívida nos cartões', fmt(divida), divida > 0 ? 'neg' : '') : null,
-    cartoes.length ? kv('Património líquido', fmt(r2(disponivel - divida)), 'strong') : null));
-  const linha = c => {
-    const cred = eCredito(c), v = Number(c.saldo_atual);
-    const plaf = cred && c.plafond != null && Number(c.plafond) > 0 ? Number(c.plafond) : null;
-    const livre = plaf != null ? Number(c.disponivel) : null;
-    const sub = !cred ? (c.principal ? 'Principal' : TIPOS_CONTA[c.tipo])
-      : plaf == null ? 'Cartão · ' + (v < 0 ? 'em dívida' : 'sem dívida')
-      : livre < 0 ? 'Acima do plafond em ' + fmtC(-livre)
-      : 'Livre ' + fmtC(livre) + ' de ' + fmtC(plaf);
-    const uso = plaf != null ? Math.min(1, Math.max(0, -v / plaf)) : 0;
-    return h('div', { class: 'lrow' },
-      h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirConta(c) },
-        h('div', { class: 'rtitle', text: c.nome }),
-        h('div', { class: 'rsub' + (livre != null && livre < 0 ? ' warn' : ''), text: sub }),
-        plaf != null ? h('div', { class: 'uso', 'aria-hidden': 'true' }, h('i', { class: uso >= 0.8 ? 'alto' : null, style: 'width:' + Math.round(uso * 100) + '%' })) : null),
-      h('div', { class: 'rval' + ((cred ? v < 0 : v < 0) ? ' neg' : ''), text: fmt(cred ? Math.abs(v) : v) }),
-      h('button', { type: 'button', class: 'mini', text: 'Ajustar', 'aria-label': 'Ajustar: ' + c.nome, onclick: () => abrirAjuste(c) }));
-  };
-  out.push(h('div', { style: 'height:8px' }), lista(dinheiro.concat(cartoes).map(linha)));
-  out.push(h('div', { class: 'linha-acoes' },
-    h('button', { type: 'button', class: 'link b', text: 'Transferir', onclick: () => abrirTransferencia() }),
-    h('button', { type: 'button', class: 'link b', text: 'Nova conta', onclick: () => abrirConta(null) })));
-  if (S.transf.length) {
-    out.push(glabel('Transferências de ' + mesMin(S.mes), 'h3'), lista(S.transf.map(t => h('button', { type: 'button', class: 'lrow', onclick: () => abrirTransferencia(t) },
-      h('div', { class: 'rmain' },
-        h('div', { class: 'rtitle', text: t.nota || 'Transferência' }),
-        h('div', { class: 'rsub', text: [diaCurto(t.data), (nomeConta(t.de_conta) || '—') + ' → ' + (nomeConta(t.para_conta) || '—'), t.recorrente_id ? 'Fixa' : null, t.data > hojeISO() ? 'agendada' : null].filter(Boolean).join(' · ') })),
-      h('div', { class: 'rval', text: fmt(t.valor) }),
-      h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))));
-  }
-  return out;
-}
-
-function abrirConta(x, aviso) {
-  const novo = !x, primeira = !S.contas.length;
-  const stT = { categoria: TIPOS_CONTA[x ? x.tipo : 'corrente'] };
-  const nome = h('input', { class: 'ginput', type: 'text', autocapitalize: 'sentences', maxlength: '40', 'aria-label': 'Nome da conta', 'aria-required': 'true',
-    placeholder: primeira ? 'Ex.: CGD' : 'Ex.: MOEY', value: x ? x.nome : '' });
-  const saldo = novo ? h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Saldo hoje', 'aria-required': 'true' }) : null;
-  const legenda = h('div', { class: 'split' });
-  const tipoAtual = () => Object.keys(TIPOS_CONTA).find(k => TIPOS_CONTA[k] === stT.categoria) || 'corrente';
-  const swP = interruptor(x ? x.principal : primeira, 'Conta principal');
-  if ((x && x.principal) || primeira) swP.disabled = true;
-  const rPrinc = grow('Conta principal', swP);
-  const plaf = campoValor(x && x.plafond != null ? x.plafond : null, 'Plafond', { placeholder: 'Opcional' });
-  const rPlaf = grow('Plafond', plaf);
-  const chipsTipo = chips(Object.values(TIPOS_CONTA), stT, 'Tipo de conta');
-  const drawTipo = () => {
-    const cred = tipoAtual() === 'credito';
-    legenda.textContent = cred ? 'quanto deves hoje neste cartão' : 'quanto tens hoje nesta conta';
-    if (saldo) saldo.setAttribute('aria-label', cred ? 'Dívida hoje' : 'Saldo hoje');
-    rPlaf.hidden = !cred;
-    rPrinc.hidden = cred && !swP.disabled;
-  };
-  chipsTipo.addEventListener('click', () => setTimeout(drawTipo, 0));
-  drawTipo();
-  let s;
-  const cred0 = x && eCredito(x);
-  const conteudo = [
-    aviso ? hint(aviso, 'warn') : null,
-    novo ? [saldo, legenda]
-      : group(kv(cred0 ? 'Em dívida' : 'Saldo atual', fmt(cred0 ? Math.abs(Number(x.saldo_atual)) : x.saldo_atual), 'strong'),
-          cred0 && x.disponivel != null ? kv('Livre', fmt(x.disponivel) + ' de ' + fmt(x.plafond)) : null,
-          x.data_ajuste ? kv('Último ajuste', diaCurto(x.data_ajuste) + ' · ' + fmt(cred0 ? Math.abs(Number(x.saldo_ajuste)) : x.saldo_ajuste)) : null,
-          grow('', h('button', { type: 'button', class: 'link b', text: 'Ajustar ao valor real', onclick: () => abrirAjuste(x) }))),
-    group(grow('Nome', nome)),
-    glabel('Tipo', 'h3'),
-    group(h('div', { class: 'pad' }, chipsTipo)),
-    group(rPlaf, rPrinc),
-    hint('Os gastos e ganhos entram na conta principal, a não ser que escolhas outra no próprio lançamento. Compras com cartão de crédito vão para o cartão; pagá-lo é uma transferência, não um gasto.'),
-    !novo && !x.principal ? botaoApagar('Apagar conta', 'Apagar «' + x.nome + '»?', 'Os ajustes e transferências desta conta são apagados. Os gastos e ganhos mantêm-se e passam para a conta principal.', async () => {
-      await q(sb.from('contas').delete().eq('id', x.conta_id));
-      s.fechar(); await carregarFixas(); await recarregar(); toast('Conta apagada');
-    }, () => s) : null,
-    !novo && x.principal && S.contas.length > 1 ? hint('Para apagar esta conta, escolhe primeiro outra como principal.') : null
-  ];
-  s = sheet(novo ? 'Nova conta' : 'Editar conta', conteudo, async () => {
-    const tipo = tipoAtual();
-    if (novo) {
-      const v = parseNum(saldo.value);
-      if (!ok(v)) return s.erro(tipo === 'credito' ? 'Indica quanto deves hoje (pode ser 0).' : 'Indica quanto tens hoje nesta conta (pode ser 0).', saldo);
-    }
-    const n = nome.value.trim();
-    if (!n) return s.erro('Dá um nome à conta.', nome);
-    if (tipo === 'credito' && swP.checked && !(x && x.principal) && !primeira) return s.erro('Um cartão de crédito não pode ser a conta principal.', swP);
-    let pl = null;
-    if (tipo === 'credito' && plaf.value.trim()) {
-      pl = parseNum(plaf.value);
-      if (!ok(pl) || pl < 0) return s.erro('O plafond tem de ser um valor válido.', plaf);
-    }
-    if (novo) {
-      const v = parseNum(saldo.value);
-      const id = await q(sb.rpc('criar_conta', { p_nome: n, p_tipo: tipo, p_saldo: tipo === 'credito' ? -Math.abs(v) : v, p_principal: tipo === 'credito' ? primeira : swP.checked }));
-      if (pl != null) await q(sb.from('contas').update({ plafond: pl }).eq('id', Number(id)));
-    } else {
-      await q(sb.from('contas').update({ nome: n, tipo: tipo, plafond: pl }).eq('id', x.conta_id));
-      if (swP.checked && !x.principal) await q(sb.rpc('definir_principal', { p_conta: x.conta_id }));
-    }
-    await recarregar();
-    toast(novo ? 'Conta criada' : 'Conta atualizada');
-  });
-  if (novo) saldo.focus();
-}
-
-function abrirAjuste(c) {
-  const cred = eCredito(c), atual = Number(c.saldo_atual);
-  const mostra = v => (cred ? -v : v);   // no cartão mostra-se a dívida em positivo
-  const inp = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': cred ? 'Dívida real hoje' : 'Saldo real hoje', 'aria-required': 'true', value: toInput(mostra(atual)) });
-  const info = h('div', { class: 'split', 'aria-live': 'polite' });
-  const sinal = d => (d > 0 ? '+' : '−') + fmt(Math.abs(d));
-  const upd = () => {
-    const v = parseNum(inp.value);
-    const d = ok(v) ? r2(v - mostra(atual)) : null;
-    info.textContent = 'A app calcula ' + fmt(mostra(atual)) + (cred ? ' em dívida' : '') + (d && Math.abs(d) >= 0.005 ? ' · diferença ' + sinal(d) : '');
-  };
-  inp.addEventListener('input', upd); upd();
-  let s;
-  s = sheet('Ajustar ' + c.nome, [inp, info,
-    hint(cred ? 'Escreve quanto deves hoje neste cartão (o valor do extrato ou da app do banco).'
-      : 'Escreve o saldo que vês hoje no banco. O que tiver data anterior a hoje deixa de mexer neste saldo; o que registares a partir de agora conta.')
-  ], async () => {
-    const v = parseNum(inp.value);
-    if (!ok(v)) return s.erro(cred ? 'Indica a dívida real.' : 'Indica o saldo real.', inp);
-    const dif = Number(await q(sb.rpc('ajustar_saldo', { p_conta: c.conta_id, p_saldo: cred ? -Math.abs(v) : v })));
-    await recarregar();
-    toast(Math.abs(dif) < 0.005 ? 'Saldo confirmado' : 'Saldo ajustado (' + sinal(cred ? -dif : dif) + ')');
-  });
-  inp.focus(); inp.select();
-}
-
-function abrirTransferencia(x) {
-  if (S.contas.length < 2) { abrirConta(null, 'Para transferir precisas de duas contas. Cria aqui a conta para onde vai o dinheiro (ex.: Poupança).'); return; }
-  const novo = !x;
-  const p = contaPrincipal() || S.contas[0];
-  const outra = S.contas.find(c => c.conta_id !== p.conta_id) || p;
-  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor a transferir', 'aria-required': 'true', value: x ? toInput(x.valor) : '' });
-  const de = selectConta(x ? x.de_conta : p.conta_id, 'De'), para = selectConta(x ? x.para_conta : outra.conta_id, 'Para');
-  const data = h('input', { class: 'ginput', type: 'date', value: x ? x.data : hojeISO(), 'aria-label': 'Data', 'aria-required': 'true' });
-  const nota = h('input', { class: 'ginput', type: 'text', maxlength: '120', autocapitalize: 'sentences', placeholder: 'Opcional', 'aria-label': 'Descrição', value: x ? (x.nota || '') : '' });
-  let s;
-  s = sheet(novo ? 'Transferir' : 'Editar transferência', [valor, h('div', { class: 'split', text: 'entre as tuas contas' }),
-    group(grow('De', de), grow('Para', para), grow('Data', data), grow('Descrição', nota)),
-    hint('Não conta como gasto nem como ganho: o dinheiro só muda de conta.'),
-    x && x.recorrente_id ? hint('Vem de uma transferência fixa: mudar aqui só altera este mês.') : null,
-    novo ? null : botaoApagar('Apagar transferência', 'Apagar esta transferência?', 'Os saldos das duas contas voltam ao que eram.' + (x.recorrente_id ? ' A fixa não a volta a criar este mês.' : ''), async () => {
-      await q(sb.from('transferencias').delete().eq('id', x.id));
-      s.fechar(); await recarregar(); toast('Transferência apagada');
-    }, () => s)
-  ], async () => {
-    const v = validarValor(s, valor); if (v === null) return false;
-    if (de.value === para.value) return s.erro('Escolhe duas contas diferentes.', para);
-    if (!data.value) return s.erro('Indica a data.', data);
-    const payload = { de_conta: Number(de.value), para_conta: Number(para.value), valor: v, data: data.value, nota: nota.value.trim() || null };
-    if (novo) await q(sb.from('transferencias').insert(payload));
-    else await q(sb.from('transferencias').update(payload).eq('id', x.id));
-    await recarregar();
-    toast(novo ? 'Transferido ' + fmt(v) : 'Transferência atualizada');
+    toast(novo ? 'Fixa criada · já está em «Por pagar»' : 'Fixa atualizada');
   });
   if (novo) valor.focus();
 }
@@ -1093,9 +774,10 @@ function itensDoMes(m) {
     const iso = m.slice(0, 8) + pad2(d);
     S.eventos.forEach(ev => { const k = posicaoEm(ev, iso); if (k >= 0) add(iso, { tipo: 'evento', agenda: ev.agenda, ev: ev, k: k, dur: duracao(ev) }); });
   }
-  S.fixas.filter(f => f.ativa).forEach(f => {
+  S.fixas.filter(f => f.ativa && f.para_conta_id == null).forEach(f => {
     const iso = m.slice(0, 8) + pad2(Math.min(f.dia_vencimento, ud));
-    if (iso >= f.inicio && (!f.fim || iso <= f.fim)) add(iso, { tipo: 'pagamento', agenda: 'pag', f: f });
+    const lanc = S.despesas.find(d => d.recorrente_id === f.id);
+    if (iso >= f.inicio && (!f.fim || iso <= f.fim)) add(iso, { tipo: 'pagamento', agenda: 'pag', f: f, paga: !!(lanc && lanc.pago) });
   });
   return res;
 }
@@ -1115,9 +797,8 @@ function linhaItemAgenda(it) {
     return h('button', { type: 'button', class: 'lrow', onclick: () => abrirFixa(f) },
       h('span', { class: 'barra ag-pag', 'aria-hidden': 'true' }),
       h('div', { class: 'rmain' },
-        h('div', { class: 'rtitle', text: (f.debito_direto ? 'Débito direto: ' : f.para_conta_id != null ? 'Transferir: ' : 'Pagar ') + f.nome }),
-        h('div', { class: 'rsub', text: [f.para_conta_id != null ? 'De ' + nomeConta(f.conta_id) + ' para ' + nomeConta(f.para_conta_id) : (f.debito_direto ? 'Sai sozinho' : 'Pagamento'),
-          f.para_conta_id == null && S.contas.length > 1 ? nomeConta(f.conta_id) : null, f.partilhada && f.parte_dela != null ? ELA() + ' paga ' + fmt(f.parte_dela) : null].filter(Boolean).join(' · ') })),
+        h('div', { class: 'rtitle', text: (f.debito_direto ? 'Débito direto: ' : 'Pagar ') + f.nome }),
+        h('div', { class: 'rsub', text: [it.paga ? 'Paga ✓' : f.debito_direto ? 'Sai sozinho' : 'Por pagar', comum(f) ? 'Comum · tua parte ' + fmt(minhaParte(f)) : null].filter(Boolean).join(' · ') })),
       h('div', { class: 'rval', text: (f.variavel ? '≈ ' : '') + fmt(f.valor) }),
       h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
   }
@@ -1263,15 +944,16 @@ function mesNav() {
     h('button', { class: 'navbtn', type: 'button', 'aria-label': 'Mês anterior', text: '‹', onclick: () => mudarMes(-1) }),
     h('span', { class: 'mesnome', text: nomeMes(S.mes) }),
     h('button', { class: 'navbtn', type: 'button', 'aria-label': 'Mês seguinte', text: '›', disabled: S.mes >= max, onclick: () => mudarMes(1) }),
-    S.mes !== mesAtual() ? h('button', { class: 'link small', type: 'button', text: 'Este mês', onclick: () => { S.mes = mesAtual(); S.despesas = []; S.ganhos = []; render(); recarregar(); } }) : null);
+    S.mes !== mesAtual() ? h('button', { class: 'link small', type: 'button', text: 'Este mês', onclick: () => { S.mes = mesAtual(); S.despesas = []; render(); recarregar(); } }) : null);
 }
 async function mudarMes(n) {
   S.mes = addMes(S.mes, n);
-  S.despesas = []; S.ganhos = [];
+  S.despesas = [];
   render();
   await recarregar();
 }
 function irPara(t) {
+  if ((t === 'fixas' || t === 'ajustes') && TABS.includes(S.tab)) S.voltar = S.tab;
   S.tab = t;
   window.scrollTo(0, 0);
   render();
@@ -1279,18 +961,18 @@ function irPara(t) {
 }
 function render() {
   if (!S.user || S.bloqueado) return;
-  const views = { mes: viewMes, despesas: viewDespesas, ganhos: viewGanhos, agenda: viewAgenda, calcular: viewCalcular, fixas: viewFixas, ajustes: viewAjustes };
-  const acoes = { mes: () => abrirDespesa(), despesas: () => abrirDespesa(), ganhos: () => abrirGanho(), agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
-  const rotulos = { mes: 'Novo gasto', despesas: 'Novo gasto', ganhos: 'Novo ganho', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
+  const views = { pagar: viewPagar, despesas: viewDespesas, comum: viewComum, agenda: viewAgenda, fixas: viewFixas, ajustes: viewAjustes };
+  const acoes = { pagar: () => abrirDespesa(), despesas: () => abrirDespesa(), comum: S.casal ? () => abrirDespesa(null, { comum: true }) : null, agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
+  const rotulos = { pagar: 'Nova despesa', despesas: 'Nova despesa', comum: 'Nova despesa em comum', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
   const botoes = h('div', { class: 'acts' },
-    S.tab === 'mes' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
-    S.tab === 'despesas' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Despesas fixas', onclick: () => irPara('fixas') }, icon(ICONS.fixas)) : null,
-    S.tab === 'ajustes' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara('mes') }) : null,
-    S.tab === 'fixas' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara('despesas') }) : null,
+    S.tab === 'pagar' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
+    S.tab === 'despesas' || S.tab === 'pagar' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Despesas fixas', onclick: () => irPara('fixas') }, icon(ICONS.fixas)) : null,
+    S.tab === 'ajustes' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara(S.voltar || 'pagar') }) : null,
+    S.tab === 'fixas' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara(S.voltar || 'pagar') }) : null,
     acoes[S.tab] ? h('button', { class: 'addbtn', type: 'button', text: '+', 'aria-label': rotulos[S.tab], onclick: acoes[S.tab] }) : null);
   const header = h('header', { class: 'top' },
     h('div', { class: 'toprow' }, h('h1', { text: TITULOS[S.tab] }), botoes),
-    (S.tab === 'mes' || S.tab === 'despesas' || S.tab === 'ganhos' || S.tab === 'agenda') ? mesNav() : null);
+    (S.tab === 'pagar' || S.tab === 'despesas' || S.tab === 'comum' || S.tab === 'agenda') ? mesNav() : null);
   const main = h('main', { 'aria-busy': S.loading ? 'true' : 'false' }, views[S.tab]());
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Separadores' }, TABS.map(t => h('button', {
     type: 'button', class: 'tab' + (S.tab === t ? ' on' : ''), 'aria-current': S.tab === t ? 'page' : null, onclick: () => irPara(t)
@@ -1418,31 +1100,38 @@ function mudarPin() {
   if (pinDe(uid)) ecraPin('atual', uid, criar, voltar); else criar();
 }
 
-function renderLogin() {
+function renderLogin(criar) {
   document.querySelectorAll('dialog').forEach(d => d.remove());
   document.body.classList.remove('noscroll');
   const email = h('input', { class: 'lfield', type: 'email', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next', placeholder: 'Email', 'aria-label': 'Email', required: true });
-  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: 'current-password', enterkeyhint: 'go', placeholder: 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
+  const pass = h('input', { class: 'lfield', type: 'password', autocomplete: criar ? 'new-password' : 'current-password', enterkeyhint: 'go', placeholder: criar ? 'Palavra-passe (mín. 8)' : 'Palavra-passe', 'aria-label': 'Palavra-passe', required: true });
   const lerr = h('p', { class: 'lerr', id: 'login-erro', role: 'alert', hidden: !S.avisoLogin, text: S.avisoLogin || '' });
   S.avisoLogin = null;
-  const btn = h('button', { class: 'btn primary', type: 'submit', text: 'Entrar' });
+  const btn = h('button', { class: 'btn primary', type: 'submit', text: criar ? 'Criar conta' : 'Entrar' });
+  const trocar = h('button', { class: 'link b', type: 'button', text: criar ? 'Já tenho conta · Entrar' : 'Ainda não tens conta? Criar conta', onclick: () => renderLogin(!criar) });
   const form = h('form', { class: 'login', 'aria-labelledby': 'login-t' },
-    h('div', { class: 'logo', 'aria-hidden': 'true', text: 'GPP' }), h('h1', { id: 'login-t', text: 'GPP Dashboard' }), h('p', { text: 'Os teus gastos e ganhos, num só sítio.' }),
-    email, pass, lerr, btn);
+    h('div', { class: 'logo', 'aria-hidden': 'true', text: 'GPP' }), h('h1', { id: 'login-t', text: criar ? 'Criar conta' : 'GPP Dashboard' }),
+    h('p', { text: criar ? 'Para registares despesas e partilhares as da casa.' : 'As tuas despesas e as da casa, e o que falta pagar.' }),
+    email, pass, lerr, btn, trocar);
   const limpar = () => { lerr.hidden = true; [email, pass].forEach(i => { i.removeAttribute('aria-invalid'); i.removeAttribute('aria-describedby'); }); };
+  const falha = (msg, campos) => {
+    lerr.textContent = msg; lerr.hidden = false;
+    campos.forEach(i => { i.setAttribute('aria-invalid', 'true'); i.setAttribute('aria-describedby', 'login-erro'); });
+    campos[campos.length - 1].focus();
+  };
   form.addEventListener('input', limpar);
   form.addEventListener('submit', async e => {
     e.preventDefault();
     limpar();
-    btn.disabled = true; btn.textContent = 'A entrar…';
-    const r = await sb.auth.signInWithPassword({ email: email.value.trim(), password: pass.value });
-    btn.disabled = false; btn.textContent = 'Entrar';
-    if (r.error) {
-      console.error(r.error);
-      lerr.textContent = traduzErro(r.error); lerr.hidden = false;
-      [email, pass].forEach(i => { i.setAttribute('aria-invalid', 'true'); i.setAttribute('aria-describedby', 'login-erro'); });
-      pass.focus();
-      return;
+    if (criar && pass.value.length < 8) return falha('A palavra-passe tem de ter pelo menos 8 caracteres.', [pass]);
+    btn.disabled = true; btn.textContent = criar ? 'A criar…' : 'A entrar…';
+    const r = criar ? await sb.auth.signUp({ email: email.value.trim(), password: pass.value })
+                    : await sb.auth.signInWithPassword({ email: email.value.trim(), password: pass.value });
+    btn.disabled = false; btn.textContent = criar ? 'Criar conta' : 'Entrar';
+    if (r.error) { console.error(r.error); return falha(traduzErro(r.error), [email, pass]); }
+    if (criar && !(r.data && r.data.session)) {
+      S.avisoLogin = 'Conta criada. Abre o email de confirmação que te enviámos e depois entra aqui.';
+      return renderLogin(false);
     }
     const u = r.data.user;
     if (pinPossivel() && !pinDe(u.id)) ecraPin('criar', u.id, () => entrar(u));
@@ -1454,8 +1143,8 @@ function renderLogin() {
 async function entrar(user) {
   S.user = user;
   S.mes = mesAtual();
-  S.tab = 'mes';
-  S.despesas = []; S.ganhos = [];
+  S.tab = 'pagar';
+  S.despesas = []; S.casal = null;
   app.replaceChildren(h('main', { 'aria-busy': 'true' }, carregando()));
   try { S.config = await q(sb.rpc('garantir_config')); }
   catch (e) { erro(e); S.config = {}; }
@@ -1466,9 +1155,9 @@ async function entrar(user) {
 
 sb.auth.onAuthStateChange(ev => {
   if (ev === 'SIGNED_OUT') {
-    S.user = null; S.config = null; S.despesas = []; S.ganhos = []; S.aReceber = []; S.fixas = []; S.contas = []; S.eventos = []; S.transf = []; S.diaSel = null;
-    S.calc = { init: false, eu: '', ela: '', valor: '' }; S.bloqueado = false;
-    setTimeout(renderLogin, 0);
+    S.user = null; S.config = null; S.despesas = []; S.atrasados = []; S.fixas = []; S.eventos = []; S.acertos = []; S.casal = null; S.diaSel = null;
+    S.bloqueado = false;
+    setTimeout(() => renderLogin(false), 0);
   }
 });
 
