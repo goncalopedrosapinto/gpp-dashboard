@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v2.5 · nov 2026';
+const VERSAO = 'v2.6 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', inquilinos: 'Inquilinos', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
 const TABS = ['pagar', 'despesas', 'comum', 'inquilinos', 'agenda'];
@@ -590,21 +590,27 @@ function viewInquilinos() {
   if (S.imoveis.length > 1) out.push(h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Imóvel' }, S.imoveis.map(i => h('button', {
     type: 'button', class: 'chip', text: i.nome, 'aria-pressed': String(i.id === S.imovelSel), onclick: async () => { S.imovelSel = i.id; await carregarImoveis(); render(); }
   }))));
-  const rec = S.receb.filter(r => r.imovel_id === im.id), desp = S.despImovel;
+  // O balanço começa na data de início do primeiro inquilino: o que é anterior não conta
+  const doImovel = S.inquilinos.filter(i => i.imovel_id === im.id);
+  const inicio = doImovel.length ? doImovel.map(i => i.inicio).sort()[0] : null;
+  const rec = S.receb.filter(r => r.imovel_id === im.id && inicio && r.data >= inicio);
+  const desp = inicio ? S.despImovel.filter(d => d.data >= inicio) : [];
   const recAno = soma(rec, r => r.valor), despAno = soma(desp, d => d.valor), balAno = r2(recAno - despAno);
+  const desde = inicio && inicio > ano + '-01-01' ? ' (desde ' + diaCurto(inicio) + ')' : '';
   const recMes = rec.filter(r => r.data.slice(0, 7) === m.slice(0, 7)), despMes = desp.filter(d => d.data.slice(0, 7) === m.slice(0, 7));
   out.push(group(h('div', { class: 'hero' },
-      h('div', { class: 'k', text: im.nome + ' · balanço de ' + ano }),
+      h('div', { class: 'k', text: im.nome + ' · balanço de ' + ano + desde }),
       h('div', { class: 'big ' + (balAno >= 0 ? 'pos' : 'neg'), text: (balAno > 0 ? '+' : '') + fmt(balAno) })),
     kv('Recebido', fmt(recAno), 'pos'), kv('Despesas', '− ' + fmt(despAno))),
-    hint('Antes de impostos: as rendas pagam IRS (categoria F). As despesas são as da categoria «' + im.categoria + '».'));
+    hint(inicio ? 'Conta a partir de ' + diaLongo(inicio) + ', o início do contrato. Antes de impostos: as rendas pagam IRS (categoria F). As despesas são as da categoria «' + im.categoria + '».'
+      : 'O balanço começa na data de início do primeiro inquilino. Adiciona-o abaixo.'));
   const balMes = r2(soma(recMes, r => r.valor) - soma(despMes, d => d.valor));
   out.push(glabel(cap(mesMin(m))), group(kv('Recebido', fmt(soma(recMes, r => r.valor)), 'pos'), kv('Despesas', '− ' + fmt(soma(despMes, d => d.valor))),
     kv('Balanço', (balMes > 0 ? '+' : '') + fmt(balMes), 'strong' + (balMes < 0 ? ' neg' : ''))));
   // Inquilinos e a renda do mês
-  const ativos = S.inquilinos.filter(i => i.imovel_id === im.id && (!i.fim || i.fim >= m) && i.inicio <= m.slice(0, 8) + pad2(ultimoDia(m)));
+  const ativos = doImovel.filter(i => (!i.fim || i.fim >= m) && i.inicio <= m.slice(0, 8) + pad2(ultimoDia(m)));
   out.push(glabel('Inquilinos'));
-  if (!ativos.length) out.push(vazio('Ainda sem inquilino neste imóvel.', 'Adicionar inquilino', () => abrirInquilino(null)));
+  if (!ativos.length) out.push(doImovel.length ? hint('O contrato começa a ' + diaLongo(inicio) + '.') : vazio('Ainda sem inquilino neste imóvel.', 'Adicionar inquilino', () => abrirInquilino(null)));
   else out.push(lista(ativos.map(i => {
     const pagaMes = soma(rec.filter(r => r.inquilino_id === i.id && r.tipo === 'renda' && r.mes_ref === m), r => r.valor);
     const venc = m.slice(0, 8) + pad2(Math.min(i.dia_pagamento, ultimoDia(m)));
@@ -612,7 +618,7 @@ function viewInquilinos() {
     return h('div', { class: 'lrow' },
       h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirInquilino(i) },
         h('div', { class: 'rtitle', text: i.nome }),
-        h('div', { class: 'rsub' + (pagaMes < Number(i.renda) && venc < hojeISO() ? ' warn' : ''), text: fmt(i.renda) + '/mês · ' + estado })),
+        h('div', { class: 'rsub' + (pagaMes < Number(i.renda) && venc < hojeISO() ? ' warn' : ''), text: fmt(i.renda) + '/mês · desde ' + diaCurto(i.inicio) + ' · ' + estado })),
       pagaMes >= Number(i.renda) ? null : h('button', { type: 'button', class: 'mini', text: 'Recebi', 'aria-label': 'Recebi: renda de ' + i.nome,
         onclick: () => abrirRecebimento(null, { tipo: 'renda', inquilino: i, mes_ref: m, valor: r2(Number(i.renda) - pagaMes) }) }));
   })));
@@ -662,29 +668,28 @@ function abrirImovel(im) {
 function abrirInquilino(i) {
   const novo = !i, im = imovelAtual();
   const nome = h('input', { class: 'ginput', type: 'text', maxlength: '60', autocapitalize: 'words', 'aria-label': 'Nome do inquilino', 'aria-required': 'true', placeholder: 'Ex.: Ana Silva', value: i ? i.nome : '' });
-  const renda = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Renda mensal', 'aria-required': 'true', value: i ? toInput(i.renda) : '' });
+  const inicio = h('input', { class: 'ginput', type: 'date', 'aria-label': 'Data de início', 'aria-required': 'true', value: i ? i.inicio : hojeISO() });
+  const renda = h('input', { class: 'ginput num', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Renda mensal', 'aria-required': 'true', value: i ? toInput(i.renda) : '' });
   const dia = h('input', { class: 'ginput num', type: 'text', inputmode: 'numeric', placeholder: '1 a 31', 'aria-label': 'Dia de pagamento', value: i ? String(i.dia_pagamento) : '8' });
-  const inicio = h('input', { class: 'ginput', type: 'date', 'aria-label': 'Início do contrato', value: i ? i.inicio : hojeISO() });
-  const fim = h('input', { class: 'ginput', type: 'date', 'aria-label': 'Saída', value: i && i.fim ? i.fim : '' });
   let s;
-  s = sheet(novo ? 'Novo inquilino' : 'Editar inquilino', [renda, h('div', { class: 'split', text: 'renda por mês' }),
-    group(grow('Nome', nome), grow('Dia de pagamento', dia), grow('Início do contrato', inicio), grow('Saída', fim)),
-    hint('Deixa «Saída» vazio enquanto o contrato estiver ativo.'),
+  s = sheet(novo ? 'Novo inquilino' : 'Editar inquilino', [
+    group(grow('Nome', nome), grow('Data de início', inicio)),
+    group(grow('Renda mensal (€)', renda), grow('Dia de pagamento', dia)),
+    hint('O balanço do imóvel conta a partir da data de início. Se o contrato for renovado com a mesma pessoa, não precisas de mudar nada; se a renda mudar, atualiza-a aqui.'),
     novo ? null : botaoApagar('Apagar inquilino', 'Apagar «' + i.nome + '»?', 'Os recebimentos ficam, sem inquilino associado.', async () => {
       await q(sb.from('inquilinos').delete().eq('id', i.id)); s.fechar(); await carregarImoveis(); render(); toast('Inquilino apagado');
     }, () => s)], async () => {
-    const v = validarValor(s, renda); if (v === null) return false;
     const n = nome.value.trim();
     if (!n) return s.erro('Escreve o nome do inquilino.', nome);
+    if (!inicio.value) return s.erro('Indica a data de início.', inicio);
+    const v = validarValor(s, renda); if (v === null) return false;
     const d = parseInt(dia.value, 10);
     if (!(d >= 1 && d <= 31)) return s.erro('O dia tem de ser entre 1 e 31.', dia);
-    if (!inicio.value) return s.erro('Indica o início do contrato.', inicio);
-    if (fim.value && fim.value < inicio.value) return s.erro('A saída tem de ser depois do início.', fim);
-    const payload = { imovel_id: im.id, nome: n, renda: v, dia_pagamento: d, inicio: inicio.value, fim: fim.value || null };
+    const payload = { imovel_id: im.id, nome: n, renda: v, dia_pagamento: d, inicio: inicio.value, fim: null };
     if (novo) await q(sb.from('inquilinos').insert(payload)); else await q(sb.from('inquilinos').update(payload).eq('id', i.id));
     await carregarImoveis(); render(); toast(novo ? 'Inquilino adicionado' : 'Inquilino guardado');
   });
-  if (novo) renda.focus();
+  if (novo) nome.focus();
 }
 function abrirRecebimento(r, preset) {
   preset = preset || {};

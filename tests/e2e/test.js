@@ -423,6 +423,7 @@ function ferramentas(page, quem) {
   await page.fill('.sheet [aria-label="Descrição"]', 'Água Esmoriz');
   await page.click('.sheet .chip:text-is("Casa Esmoriz")');
   await G.guardar();
+  await bd("insert into despesas (owner, data, valor, descricao, categoria) values ($1, current_date - 3, 644.30, 'Obras antes do contrato', 'Casa Esmoriz')", [USER.id]);
   await G.tab('Inquilinos');
   await page.click('button:has-text("Configurar imóvel")'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Nome do imóvel"]', 'T1 Esmoriz');
@@ -432,6 +433,7 @@ function ferramentas(page, quem) {
   await page.click('button:has-text("Adicionar inquilino")'); await page.waitForSelector('dialog.sheet[open]');
   await page.fill('.sheet [aria-label="Renda mensal"]', '650');
   await page.fill('.sheet [aria-label="Nome do inquilino"]', 'Ana');
+  check(await page.$('.sheet [aria-label="Saída"]') === null && (await page.inputValue('.sheet [aria-label="Data de início"]')) === hoje, 'inquilino: nome e data de início (hoje), sem data de saída');
   await G.auditar('novo inquilino');
   await G.guardar();
   await page.click('[aria-label="Recebi: renda de Ana"]'); await page.waitForSelector('dialog.sheet[open]');
@@ -446,7 +448,7 @@ function ferramentas(page, quem) {
   check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '20,00', 'escolher a despesa preenche o valor (20 €)');
   await G.guardar();
   check(await G.tem('reembolsada pelo inquilino') && (await G.texto()).includes('Reembolso · Água Esmoriz'), 'reembolso ligado à despesa da água');
-  check((await G.semEsp()).includes('+650,00€'), 'balanço do imóvel: 650 + 20 − 20 = +650,00 €');
+  check((await G.semEsp()).includes('+650,00€') && !(await G.texto()).includes('Obras antes do contrato'), 'balanço só desde o início do contrato: 650 + 20 − 20 = +650,00 € (as obras de antes não contam)');
   const rb = await bd("select tipo, mes_ref::text, despesa_id is not null d from recebimentos order by id");
   check(rb.length === 2 && rb[0].tipo === 'renda' && rb[0].mes_ref === hoje.slice(0, 8) + '01' && rb[1].tipo === 'despesa' && rb[1].d, 'base de dados: renda do mês e reembolso da despesa');
   await G.shot('06d-inquilinos');
