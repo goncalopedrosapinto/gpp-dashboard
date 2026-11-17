@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v2.8 · nov 2026';
+const VERSAO = 'v2.9 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', inquilinos: 'Inquilinos', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
 const TABS = ['pagar', 'despesas', 'comum', 'inquilinos', 'agenda'];
@@ -581,10 +581,10 @@ const desdeTxt = d => 'desde ' + (d === hojeISO() ? 'hoje' : diaCurto(d));
 const nomeMesCurto = m => new Intl.DateTimeFormat('pt-PT', { month: 'long' }).format(new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1));
 // Movimentos da conta do inquilino: rendas vencidas e despesas cobradas (−), transferências recebidas (+)
 function movimentosInquilino(i) {
-  const mov = [], hoje = hojeISO();
-  for (let m = i.inicio.slice(0, 8) + '01'; m <= mesAtual(); m = addMes(m, 1)) {
+  const mov = [], hoje = hojeISO(), ate = [mesAtual(), S.mes].sort()[1];
+  for (let m = i.inicio.slice(0, 8) + '01'; m <= ate; m = addMes(m, 1)) {
     const venc = [m.slice(0, 8) + pad2(Math.min(i.dia_pagamento, ultimoDia(m))), i.inicio].sort()[1];
-    if (venc <= hoje) mov.push({ tipo: 'renda', data: venc, titulo: 'Renda de ' + nomeMesCurto(m), valor: -Number(i.renda) });
+    mov.push({ tipo: 'renda', data: venc, titulo: 'Renda de ' + nomeMesCurto(m), sub: venc > hoje ? 'vence ' + diaCurto(venc) : null, valor: -Number(i.renda) });
   }
   S.despImovel.filter(d => d.inquilino_id === i.id).forEach(d => mov.push({ tipo: 'cobranca', d: d, data: d.cobrada_em || d.data,
     titulo: d.descricao || 'Despesa', sub: 'paga por ti ' + (d.data === hoje ? 'hoje' : 'a ' + diaCurto(d.data)), valor: -Number(d.valor) }));
@@ -613,28 +613,37 @@ function viewInquilinos() {
       h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Editar imóvel', onclick: () => abrirImovel(im) }), novoImovel));
     return out;
   }
-  const mov = movimentosInquilino(i), saldo = r2(soma(mov, x => x.valor));   // negativo = deve
+  // Saldo até ao fim do mês que estás a ver (a renda desse mês conta, mesmo que ainda não tenha vencido)
+  const fimMes = m.slice(0, 8) + pad2(ultimoDia(m)), atual = m === mesAtual();
+  const mov = movimentosInquilino(i).filter(x => x.data <= fimMes), saldo = r2(soma(mov, x => x.valor));   // negativo = deve
+  const rendaFutura = mov.find(x => x.tipo === 'renda' && x.data.slice(0, 7) === m.slice(0, 7) && x.data > hojeISO());
   out.push(group(h('div', { class: 'hero' },
     h('div', { class: 'k', text: i.nome + ' · ' + desdeTxt(i.inicio) + ' · renda ' + fmt(i.renda) }),
     h('div', { class: 'big ' + (saldo < -0.005 ? 'neg' : 'pos'), text: saldo < -0.005 ? 'Deve ' + fmt(-saldo) : saldo > 0.005 ? 'A crédito ' + fmt(saldo) : 'Tem tudo pago' }),
+    h('div', { class: 'k', text: [atual ? 'até hoje e a renda deste mês' : 'até ao fim de ' + mesMin(m), rendaFutura ? 'a renda de ' + nomeMesCurto(m) + ' vence a ' + diaCurto(rendaFutura.data) : null].filter(Boolean).join(' · ') }),
     h('button', { type: 'button', class: 'btn primary', text: 'Recebi uma transferência', onclick: () => abrirPagamento(i, null, saldo < 0 ? -saldo : null) }),
     h('div', { class: 'linha-acoes', style: 'margin:8px 0 0' },
       h('button', { type: 'button', class: 'link b', text: 'Cobrar despesa', onclick: () => abrirCobranca(i) }),
       h('button', { type: 'button', class: 'link b', text: 'Editar', 'aria-label': 'Editar inquilino ' + i.nome, onclick: () => abrirInquilino(i) })))));
-  out.push(hint('Saldo = rendas vencidas + despesas cobradas − transferências recebidas, desde o início do contrato.'));
+  out.push(hint('Saldo = rendas + despesas cobradas − transferências recebidas, desde o início do contrato até ao fim do mês que estás a ver.'));
   const doMes = mov.filter(x => x.data.slice(0, 7) === m.slice(0, 7)).reverse();
   out.push(glabel('Movimentos de ' + mesMin(m)));
   out.push(doMes.length ? lista(doMes.map(x => linhaMovimento(i, x))) : hint(m < i.inicio.slice(0, 8) + '01' ? 'O contrato começa a ' + diaLongo(i.inicio) + '.' : 'Sem movimentos neste mês.'));
 
-  // Balanço do imóvel: recebido − despesas do imóvel, desde o início do contrato
-  const rec = S.receb.filter(r => r.imovel_id === im.id && r.data >= i.inicio && r.data.slice(0, 4) === ano);
-  const desp = S.despImovel.filter(d => d.data >= i.inicio && d.data.slice(0, 4) === ano);
-  const recAno = soma(rec, r => r.valor), despAno = soma(desp, d => d.valor), balAno = r2(recAno - despAno);
-  out.push(glabel('Balanço de ' + im.nome), group(h('div', { class: 'hero' },
-      h('div', { class: 'k', text: ano + (i.inicio > ano + '-01-01' ? ' · ' + desdeTxt(i.inicio) : '') }),
-      h('div', { class: 'big ' + (balAno >= 0 ? 'pos' : 'neg'), text: (balAno > 0 ? '+' : '') + fmt(balAno) })),
-    kv('Recebido', fmt(recAno), 'pos'), kv('Despesas do imóvel', '− ' + fmt(despAno))),
-    hint('Recebido menos as despesas com a categoria «' + im.categoria + '», desde o início do contrato. Antes de impostos: as rendas pagam IRS (categoria F).'));
+  // Balanço do imóvel: recebido − despesas do imóvel, desde o início do contrato (total e do mês)
+  const rec = S.receb.filter(r => r.imovel_id === im.id && r.data >= i.inicio);
+  const desp = S.despImovel.filter(d => d.data >= i.inicio);
+  const recT = soma(rec, r => r.valor), despT = soma(desp, d => d.valor), balT = r2(recT - despT);
+  const doM = x => x.data.slice(0, 7) === m.slice(0, 7);
+  const recM = soma(rec.filter(doM), r => r.valor), despM = soma(desp.filter(doM), d => d.valor), balM = r2(recM - despM);
+  const sinal = v => (v > 0 ? '+' : '') + fmt(v);
+  out.push(glabel('Balanço de ' + im.nome), group(
+    h('div', { class: 'hero' }, h('div', { class: 'k', text: 'Total ' + desdeTxt(i.inicio) }), h('div', { class: 'big ' + (balT >= 0 ? 'pos' : 'neg'), text: sinal(balT) })),
+    kv('Recebido', fmt(recT), 'pos'), kv('Despesas do imóvel', '− ' + fmt(despT))));
+  out.push(glabel(cap(mesMin(m))), group(
+    kv('Recebido', fmt(recM), 'pos'), kv('Despesas do imóvel', '− ' + fmt(despM)),
+    kv('Balanço do mês', sinal(balM), 'strong' + (balM < 0 ? ' neg' : ''))),
+    hint('Recebido menos as despesas com a categoria «' + im.categoria + '» (pagas por ti), desde o início do contrato. Antes de impostos: as rendas pagam IRS (categoria F).'));
   out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Editar imóvel', onclick: () => abrirImovel(im) }), novoImovel));
   return out;
 }

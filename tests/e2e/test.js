@@ -450,6 +450,11 @@ function ferramentas(page, quem) {
   const rb = await bd("select tipo, valor from recebimentos");
   const ag = (await bd("select inquilino_id is not null a, cobrada_em::text c from despesas where descricao = 'Água Esmoriz'"))[0];
   check(rb.length === 1 && rb[0].tipo === 'outro' && rb[0].valor === 670 && ag.a && ag.c === hoje, 'base de dados: uma transferência de 670 € e a água cobrada hoje');
+  await page.click('[aria-label="Mês seguinte"]'); await page.waitForTimeout(400);
+  check(await G.tem('Deve 650,00') && await G.tem('vence'), 'no mês seguinte: deve a renda desse mês (650 €), com a data em que vence');
+  check((await G.semEsp()).includes('Balançodomês+0,00€') || (await G.semEsp()).includes('Balançodomês0,00€'), 'balanço do mês seguinte: 0 € (nada recebido nem pago ainda)');
+  await page.click('button:has-text("Este mês")'); await page.waitForTimeout(400);
+  check((await G.semEsp()).includes('Total' ) && (await G.semEsp()).split('+650,00€').length >= 3, 'balanço total e do mês: +650,00 € nos dois');
   await G.shot('06d-inquilinos');
   await G.auditar('inquilinos');
   await page.click('button:has-text("Novo imóvel")'); await page.waitForSelector('dialog.sheet[open]');
