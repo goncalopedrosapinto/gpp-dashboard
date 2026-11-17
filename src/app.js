@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v2.0 · nov 2026';
+const VERSAO = 'v2.1 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
 const TABS = ['pagar', 'despesas', 'comum', 'agenda'];
@@ -351,6 +351,11 @@ function viewPagar() {
   const pagosFixas = S.despesas.filter(x => x.pago && x.recorrente_id);
   if (pagosFixas.length) out.push(glabel('Já pagos'), lista(pagosFixas.map(linhaPagar)));
   if (porPagar.length) out.push(hint('Toca no círculo para marcar como paga. Se te enganares, toca outra vez.'));
+  const nFix = S.fixas.filter(f => f.ativa).length;
+  out.push(glabel('Todos os meses'), lista([h('button', { type: 'button', class: 'lrow', onclick: () => irPara('fixas') },
+    h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: 'Despesas fixas' }),
+      h('div', { class: 'rsub', text: nFix ? nFix + (nFix === 1 ? ' ativa · ' : ' ativas · ') + fmt(soma(S.fixas.filter(f => f.ativa && f.para_conta_id == null), f => f.valor)) + ' por mês' : 'Crédito habitação, ginásio, água, luz…' })),
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }))]));
 
   // Quanto gastaste: as tuas despesas + a tua parte das despesas em comum
   const pessoais = S.despesas.filter(x => !comum(x)), comuns = S.despesas.filter(comum);
@@ -648,6 +653,15 @@ function abrirDespesa(x, preset) {
   swPago.addEventListener('change', () => { tocouPago = true; });
   data.addEventListener('change', () => { if (!tocouPago && data.value) swPago.checked = data.value <= hojeISO(); });
   const bc = blocoComum(x, valor, preset);
+  // Nova despesa que se repete: passa a ser uma despesa fixa mensal (crédito, ginásio…)
+  const swRep = novo ? interruptor(!!preset.repete, 'Repete todos os meses') : null;
+  const swDebR = novo ? interruptor(false, 'Débito direto') : null;
+  const rDebR = novo ? grow('Débito direto', swDebR) : null;
+  const notaRep = novo ? hint('Entra todos os meses neste dia como «por pagar», e a agenda do iPhone avisa-te na véspera.') : null;
+  const rDesc = grow('Descrição', desc);
+  if (notaRep) notaRep.style.margin = '-10px 16px 18px';
+  const drawRep = () => { if (!novo) return; rDebR.hidden = notaRep.hidden = !swRep.checked; const t = swRep.checked ? 'Nome' : 'Descrição'; rDesc.firstChild.textContent = t; desc.setAttribute('aria-label', t); desc.placeholder = swRep.checked ? 'Ex.: Crédito habitação' : 'Ex.: Jantar'; };
+  if (novo) { swRep.addEventListener('change', drawRep); drawRep(); }
 
   let origem = null;
   if (x && x.origem === 'apple_pay') origem = [fonteTxt(x), x.cartao, x.comerciante].filter(Boolean).join(' · ');
@@ -659,7 +673,8 @@ function abrirDespesa(x, preset) {
   const conteudo = [
     valor, bc ? bc.info : null,
     origem ? hint(origem, x && x.estimado ? 'center warn' : 'center') : null,
-    group(grow('Descrição', desc), grow('Data', data), grow('Já está paga', swPago)),
+    group(rDesc, grow('Data', data), grow('Já está paga', swPago)),
+    novo ? group(grow('Repete todos os meses', swRep), rDebR) : null, notaRep,
     bc ? bc.group : null,
     glabel('Categoria', 'h3'),
     group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
@@ -675,6 +690,18 @@ function abrirDespesa(x, preset) {
     if (!data.value) return s.erro('Indica a data.', data);
     const cc = bc ? bc.ler(s) : { casal_id: x ? x.casal_id : null }; if (!cc) return false;
     const payload = Object.assign({ valor: v, descricao: desc.value.trim() || null, data: data.value, categoria: st.categoria, pago: swPago.checked, estimado: false }, cc);
+    if (novo && swRep.checked) {
+      if (!payload.descricao) return s.erro('Dá um nome à despesa fixa (ex.: Crédito habitação).', desc);
+      const mesD = data.value.slice(0, 8) + '01';
+      const fx = await q(sb.from('despesas_recorrentes').insert(Object.assign({ nome: payload.descricao, valor: v, dia_vencimento: Number(data.value.slice(8, 10)),
+        categoria: st.categoria, debito_direto: swDebR.checked, inicio: mesD }, cc)).select());
+      const fid = fx && fx[0] && fx[0].id;
+      await q(sb.rpc('gerar_recorrentes', { p_mes: mesD }));
+      if (fid && swPago.checked) await q(sb.from('despesas').update({ pago: true }).eq('recorrente_id', fid).eq('mes', mesD));
+      await carregarFixas(); await recarregar();
+      toast('Despesa fixa criada · repete todos os meses no dia ' + Number(data.value.slice(8, 10)));
+      return;
+    }
     if (novo) await q(sb.from('despesas').insert(payload));
     else await q(sb.from('despesas').update(payload).eq('id', x.id));
     const mesD = payload.data.slice(0, 8) + '01';

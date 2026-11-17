@@ -341,6 +341,29 @@ function ferramentas(page, quem) {
   await G.shot('06-despesas');
   await G.auditar('despesas');
 
+  // ===== Despesa que se repete todos os meses =====
+  console.log('Repete todos os meses');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor"]', '515');
+  await page.check('.sheet [aria-label="Repete todos os meses"]');
+  check(await page.isVisible('.sheet [aria-label="Débito direto"]') && await page.$('.sheet [aria-label="Nome"]') !== null, '«Repete todos os meses» mostra o débito direto e pede um nome');
+  await page.click('.sheet .snav .link.b');
+  check(await G.tem('Dá um nome à despesa fixa'), 'sem nome: erro junto ao Guardar');
+  await page.fill('.sheet [aria-label="Nome"]', 'Crédito habitação');
+  await page.check('.sheet [aria-label="Débito direto"]');
+  await page.click('.sheet .chip:has-text("Casa")');
+  await G.shot('06b-repete');
+  await G.auditar('repete todos os meses');
+  await G.guardar();
+  await G.toastTem('Despesa fixa criada');
+  const ch = (await bd("select r.dia_vencimento, r.debito_direto, d.pago from despesas_recorrentes r join despesas d on d.recorrente_id = r.id where r.nome = 'Crédito habitação'"));
+  check(ch.length === 1 && ch[0].dia_vencimento === diaHoje && ch[0].debito_direto && ch[0].pago, 'crédito habitação: fixa no dia ' + diaHoje + ', débito direto, e o lançamento de hoje já pago');
+  await G.tab('Por pagar');
+  check((await G.texto()).includes('Despesas fixas') && (await G.texto()).includes('4 ativas'), '«Por pagar» mostra a entrada «Despesas fixas» (4 ativas)');
+  await page.click('.lrow:has(.rtitle:text-is("Despesas fixas"))'); await page.waitForSelector('h1:has-text("Fixas")');
+  check((await G.texto()).includes('Crédito habitação'), 'a entrada abre a lista das fixas');
+  await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
+
   // ===== Em comum (Gonçalo) =====
   console.log('Em comum');
   await G.tab('Em comum');
