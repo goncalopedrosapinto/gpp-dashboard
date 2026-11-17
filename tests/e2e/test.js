@@ -364,6 +364,30 @@ function ferramentas(page, quem) {
   check((await G.texto()).includes('Crédito habitação'), 'a entrada abre a lista das fixas');
   await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
 
+  // ===== Categorias próprias =====
+  console.log('Categorias');
+  await page.click('[aria-label="Ajustes"]'); await page.waitForSelector('h1:has-text("Ajustes")');
+  check((await G.texto()).includes('Subscrições'), 'Ajustes mostra as categorias de sempre');
+  await page.click('.lrow:has(.rtitle:text-is("Casa"))'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Nome da categoria"]', 'Casa Aveiro');
+  await G.guardar();
+  await G.toastTem('Categoria guardada');
+  check((await bd("select count(*)::int n from despesas where categoria = 'Casa'"))[0].n === 0 && (await bd("select count(*)::int n from despesas where categoria = 'Casa Aveiro'"))[0].n > 0, 'mudar «Casa» para «Casa Aveiro» acompanha as despesas');
+  await page.click('button:has-text("Nova categoria")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Nome da categoria"]', 'casa aveiro');
+  await page.click('.sheet .snav .link.b');
+  check(await G.tem('Já existe uma categoria com esse nome'), 'categoria repetida: erro claro');
+  await page.fill('.sheet [aria-label="Nome da categoria"]', 'Casa Esmoriz');
+  await G.guardar();
+  await G.shot('06c-categorias');
+  await G.auditar('categorias');
+  await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
+  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
+  check(await page.$('.sheet .chip:text-is("Casa Esmoriz")') !== null && await page.$('.sheet .chip:text-is("Casa")') === null, 'nova despesa já mostra «Casa Esmoriz»');
+  await page.check('.sheet [aria-label="Repete todos os meses"]');
+  check(await page.isVisible('.sheet [aria-label="Valor variável"]'), '«Repete todos os meses» também oferece «Valor variável»');
+  await page.keyboard.press('Escape'); await G.fechado();
+
   // ===== Em comum (Gonçalo) =====
   console.log('Em comum');
   await G.tab('Em comum');

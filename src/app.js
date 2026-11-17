@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v2.1 · nov 2026';
+const VERSAO = 'v2.2 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
 const TABS = ['pagar', 'despesas', 'comum', 'agenda'];
@@ -20,7 +20,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 const S = {
   user: null, config: null, tab: 'pagar', mes: null, filtro: 'todas', loading: false, seq: 0,
-  despesas: [], atrasados: [], fixas: [], eventos: [], acertos: [], casal: null, diaSel: null,
+  despesas: [], atrasados: [], fixas: [], eventos: [], acertos: [], casal: null, categorias: [], diaSel: null,
   bloqueado: false, saiuEm: 0, avisoLogin: null
 };
 
@@ -129,6 +129,7 @@ const comum = x => x.casal_id != null;
 const pctEu = x => (!comum(x) || x.pct_m1 == null || !S.casal ? 100 : S.casal.eu.ordem === 1 ? Number(x.pct_m1) : 100 - Number(x.pct_m1));
 const minhaParte = x => r2(Number(x.valor) * pctEu(x) / 100);
 const pagouEu = x => !!(S.casal && x.pago_por_membro === S.casal.eu.membro_id);
+const listaCats = atual => { const l = S.categorias.length ? S.categorias.map(c => c.nome) : CATEGORIAS.slice(); if (atual && !l.includes(atual)) l.push(atual); return l; };
 const fonteTxt = x => (x.fonte === 'notificacao' ? 'Notificação do banco' : x.fonte === 'ambas' ? 'Apple Pay + banco' : 'Apple Pay');
 const porRever = x => x.origem === 'apple_pay' && !x.categoria;
 
@@ -147,7 +148,8 @@ function traduzErro(e) {
   if (/already registered|already exists/i.test(m)) return 'Já existe uma conta com este email. Entra com ela.';
   if (/password should be|weak password/i.test(m)) return 'Palavra-passe fraca: usa pelo menos 8 caracteres, com letras e números.';
   if (/signups not allowed|signup is disabled/i.test(m)) return 'Criar contas está desligado no servidor. Pede ao Gonçalo para o ligar.';
-  if (/^(Já tens|Código inválido|A conta em comum|Ainda não tens|A percentagem)/.test(m)) return m;
+  if (/categorias_owner_nome_uk/.test(m)) return 'Já existe uma categoria com esse nome.';
+  if (/^(Já tens|Código inválido|A conta em comum|Ainda não tens|A percentagem|O nome tem|Já existe|Categoria inexistente)/.test(m)) return m;
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return 'Sem ligação. Tenta outra vez.';
   if (/jwt|session|refresh token/i.test(m)) return 'A sessão expirou. Entra outra vez.';
   if (/parte_dela_ck/.test(m)) return 'A parte ' + DA() + ' não pode ser maior que o total.';
@@ -302,6 +304,9 @@ async function carregarFixas() {
   } catch (e) { erro(e); }
 }
 async function recarregar() { await carregarMes(); render(); }
+async function carregarCategorias() {
+  try { S.categorias = (await q(sb.rpc('garantir_categorias'))) || []; } catch (e) { erro(e); }
+}
 async function guardarConfig(campos, silencioso) {
   try {
     await q(sb.from('config').update(campos).eq('owner', S.user.id));
@@ -577,6 +582,13 @@ function viewAjustes() {
   const url = SUPABASE_URL + '/rest/v1/rpc/registar_apple_pay';
   const tk = c.token_atalho || '';
   return [
+    glabel('Categorias'),
+    lista(S.categorias.map(c => h('button', { type: 'button', class: 'lrow', onclick: () => abrirCategoria(c) },
+      h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: c.nome })),
+      h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' })))),
+    h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Nova categoria', onclick: () => abrirCategoria(null) })),
+    hint('Ex.: «Casa Aveiro» e «Casa Esmoriz» em vez de só «Casa». Mudar o nome muda também as tuas despesas e fixas com essa categoria.'),
+
     glabel('Atalho do iPhone · registo automático'),
     group(
       linhaCopiar('URL Wallet', url, 'rpc/registar_apple_pay'),
@@ -597,6 +609,26 @@ function viewAjustes() {
     h('button', { type: 'button', class: 'btn danger', text: 'Terminar sessão', onclick: async () => { await sb.auth.signOut(); } }),
     hint('GPP Dashboard ' + VERSAO)
   ];
+}
+
+function abrirCategoria(c) {
+  const novo = !c;
+  const nome = h('input', { class: 'ginput', type: 'text', maxlength: '30', autocapitalize: 'sentences', 'aria-label': 'Nome da categoria', 'aria-required': 'true', placeholder: 'Ex.: Casa Esmoriz', value: c ? c.nome : '' });
+  let s;
+  s = sheet(novo ? 'Nova categoria' : 'Editar categoria', [group(grow('Nome', nome)),
+    novo ? null : botaoApagar('Apagar categoria', 'Apagar «' + c.nome + '»?', 'Deixa de aparecer na lista. As despesas que já a têm mantêm o nome.', async () => {
+      await q(sb.from('categorias').delete().eq('id', c.id));
+      s.fechar(); await carregarCategorias(); render(); toast('Categoria apagada');
+    }, () => s)], async () => {
+    const n = nome.value.trim();
+    if (!n) return s.erro('Dá um nome à categoria.', nome);
+    if (S.categorias.some(x => (!c || x.id !== c.id) && x.nome.trim().toLowerCase() === n.toLowerCase())) return s.erro('Já existe uma categoria com esse nome.', nome);
+    if (novo) await q(sb.from('categorias').insert({ nome: n, ordem: S.categorias.reduce((m, x) => Math.max(m, x.ordem), 0) + 1 }));
+    else if (n !== c.nome) await q(sb.rpc('renomear_categoria', { p_id: c.id, p_nome: n }));
+    await carregarCategorias(); await carregarFixas(); await recarregar();
+    toast(novo ? 'Categoria criada' : 'Categoria guardada');
+  });
+  nome.focus();
 }
 
 // ===================== Folhas de edição =====================
@@ -657,10 +689,12 @@ function abrirDespesa(x, preset) {
   const swRep = novo ? interruptor(!!preset.repete, 'Repete todos os meses') : null;
   const swDebR = novo ? interruptor(false, 'Débito direto') : null;
   const rDebR = novo ? grow('Débito direto', swDebR) : null;
-  const notaRep = novo ? hint('Entra todos os meses neste dia como «por pagar», e a agenda do iPhone avisa-te na véspera.') : null;
+  const swVarR = novo ? interruptor(false, 'Valor variável') : null;
+  const rVarR = novo ? grow('Valor variável', swVarR) : null;
+  const notaRep = novo ? hint('Entra todos os meses neste dia como «por pagar», e a agenda do iPhone avisa-te na véspera. Com valor variável (água, luz), este valor é uma estimativa: em cada mês escreves o da fatura e a estimativa passa a ser a média das últimas 3.') : null;
   const rDesc = grow('Descrição', desc);
   if (notaRep) notaRep.style.margin = '-10px 16px 18px';
-  const drawRep = () => { if (!novo) return; rDebR.hidden = notaRep.hidden = !swRep.checked; const t = swRep.checked ? 'Nome' : 'Descrição'; rDesc.firstChild.textContent = t; desc.setAttribute('aria-label', t); desc.placeholder = swRep.checked ? 'Ex.: Crédito habitação' : 'Ex.: Jantar'; };
+  const drawRep = () => { if (!novo) return; rDebR.hidden = rVarR.hidden = notaRep.hidden = !swRep.checked; const t = swRep.checked ? 'Nome' : 'Descrição'; rDesc.firstChild.textContent = t; desc.setAttribute('aria-label', t); desc.placeholder = swRep.checked ? 'Ex.: Crédito habitação' : 'Ex.: Jantar'; };
   if (novo) { swRep.addEventListener('change', drawRep); drawRep(); }
 
   let origem = null;
@@ -674,10 +708,10 @@ function abrirDespesa(x, preset) {
     valor, bc ? bc.info : null,
     origem ? hint(origem, x && x.estimado ? 'center warn' : 'center') : null,
     group(rDesc, grow('Data', data), grow('Já está paga', swPago)),
-    novo ? group(grow('Repete todos os meses', swRep), rDebR) : null, notaRep,
+    novo ? group(grow('Repete todos os meses', swRep), rDebR, rVarR) : null, notaRep,
     bc ? bc.group : null,
     glabel('Categoria', 'h3'),
-    group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
+    group(h('div', { class: 'pad' }, chips(listaCats(st.categoria), st))),
     x && x.origem === 'apple_pay' && x.comerciante ? h('p', { class: 'hint', style: 'margin-top:-10px', text: 'A categoria fica memorizada para «' + x.comerciante + '».' }) : null,
     novo ? null : botaoApagar('Apagar despesa', 'Apagar esta despesa?', '«' + titulo + '» · ' + fmt(x.valor) + (comum(x) ? '. Desaparece também para ' + ELA() : '') + '. Não dá para desfazer.', async () => {
       await q(sb.from('despesas').delete().eq('id', x.id));
@@ -694,10 +728,10 @@ function abrirDespesa(x, preset) {
       if (!payload.descricao) return s.erro('Dá um nome à despesa fixa (ex.: Crédito habitação).', desc);
       const mesD = data.value.slice(0, 8) + '01';
       const fx = await q(sb.from('despesas_recorrentes').insert(Object.assign({ nome: payload.descricao, valor: v, dia_vencimento: Number(data.value.slice(8, 10)),
-        categoria: st.categoria, debito_direto: swDebR.checked, inicio: mesD }, cc)).select());
+        categoria: st.categoria, debito_direto: swDebR.checked, variavel: swVarR.checked, inicio: mesD }, cc)).select());
       const fid = fx && fx[0] && fx[0].id;
       await q(sb.rpc('gerar_recorrentes', { p_mes: mesD }));
-      if (fid && swPago.checked) await q(sb.from('despesas').update({ pago: true }).eq('recorrente_id', fid).eq('mes', mesD));
+      if (fid && swPago.checked) await q(sb.from('despesas').update({ pago: true, estimado: false }).eq('recorrente_id', fid).eq('mes', mesD));
       await carregarFixas(); await recarregar();
       toast('Despesa fixa criada · repete todos os meses no dia ' + Number(data.value.slice(8, 10)));
       return;
@@ -735,7 +769,7 @@ function abrirFixa(x) {
     group(grow('Nome', nome), rDia, grow('Débito direto', swDeb), grow('Valor variável', swVar)),
     hint('Entra todos os meses como «por pagar» e a agenda do iPhone avisa-te na véspera. Com valor variável (água, luz) entra com uma estimativa até escreveres o valor da fatura.'),
     bc ? bc.group : null,
-    glabel('Categoria', 'h3'), group(h('div', { class: 'pad' }, chips(CATEGORIAS, st))),
+    glabel('Categoria', 'h3'), group(h('div', { class: 'pad' }, chips(listaCats(st.categoria), st))),
     novo ? null : group(grow('Ativa', swAtiva)),
     novo ? null : botaoApagar('Apagar despesa fixa', 'Apagar «' + x.nome + '»?', 'Deixa de entrar nos próximos meses. Os meses já lançados mantêm-se.', async () => {
       await q(sb.from('despesas_recorrentes').delete().eq('id', x.id));
@@ -1176,7 +1210,7 @@ async function entrar(user) {
   try { S.config = await q(sb.rpc('garantir_config')); }
   catch (e) { erro(e); S.config = {}; }
   render();
-  await Promise.all([carregarMes(), carregarFixas()]);
+  await Promise.all([carregarMes(), carregarFixas(), carregarCategorias()]);
   render();
 }
 

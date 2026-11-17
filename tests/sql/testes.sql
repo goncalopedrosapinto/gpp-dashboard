@@ -522,4 +522,32 @@ do $$ begin
 end $$;
 reset role;
 
+\echo '--- T19: categorias proprias ---'
+set role authenticated;
+set request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ declare n int; c bigint; begin
+  select count(*) into n from garantir_categorias();
+  if n <> 9 then raise exception 'T19 falhou: categorias iniciais %', n; end if;
+  select count(*) into n from garantir_categorias();
+  if n <> 9 then raise exception 'T19 falhou: duplicou as iniciais'; end if;
+  insert into despesas (valor, descricao, categoria) values (30, 'Lâmpadas', 'Casa');
+  insert into despesas_recorrentes (nome, valor, dia_vencimento, categoria) values ('Condomínio', 25, 2, 'Casa');
+  select id into c from categorias where nome = 'Casa';
+  perform renomear_categoria(c, 'Casa Aveiro');
+  if (select categoria from despesas where descricao = 'Lâmpadas') <> 'Casa Aveiro' or (select categoria from despesas_recorrentes where nome = 'Condomínio') <> 'Casa Aveiro'
+    then raise exception 'T19 falhou: renomear nao acompanhou'; end if;
+  insert into categorias (nome, ordem) values ('Casa Esmoriz', 10);
+  begin insert into categorias (nome) values (' casa esmoriz '); raise exception 'T19 falhou: nome repetido aceite';
+  exception when unique_violation then null; end;
+  begin perform renomear_categoria(c, 'casa esmoriz'); raise exception 'T19 falhou: renomear para nome existente';
+  exception when raise_exception then if sqlerrm not like 'Já existe%' then raise; end if; end;
+  delete from categorias where nome = 'Casa Esmoriz';
+end $$;
+set request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  if exists (select 1 from categorias where nome = 'Casa Aveiro') then raise exception 'T19 falhou: Bia ve categorias do Gonçalo'; end if;
+  raise notice 'categorias: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'
