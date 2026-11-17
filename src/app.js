@@ -4,7 +4,7 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v2.6 · nov 2026';
+const VERSAO = 'v2.7 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
 const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', inquilinos: 'Inquilinos', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
 const TABS = ['pagar', 'despesas', 'comum', 'inquilinos', 'agenda'];
@@ -20,7 +20,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 const S = {
   user: null, config: null, tab: 'pagar', mes: null, filtro: 'todas', loading: false, seq: 0,
-  despesas: [], atrasados: [], fixas: [], eventos: [], acertos: [], casal: null, categorias: [], contas: [], imoveis: null, inquilinos: [], receb: [], despImovel: [], imovelSel: null, diaSel: null,
+  despesas: [], atrasados: [], fixas: [], eventos: [], acertos: [], casal: null, categorias: [], contas: [], imoveis: null, inquilinos: [], receb: [], despImovel: [], despInq: [], imovelSel: null, diaSel: null,
   bloqueado: false, saiuEm: 0, avisoLogin: null
 };
 
@@ -567,81 +567,125 @@ async function carregarImoveis() {
     const res = await Promise.all([
       q(sb.from('imoveis').select('*').order('id')),
       q(sb.from('inquilinos').select('*').order('inicio')),
-      q(sb.from('recebimentos').select('*').gte('data', ano + '-01-01').lte('data', ano + '-12-31').order('data', { ascending: false }).order('id', { ascending: false }))
+      q(sb.from('recebimentos').select('*').order('data', { ascending: false }).order('id', { ascending: false })),
+      q(sb.from('despesas').select('*').gt('inquilino_id', 0).order('data', { ascending: false }))
     ]);
-    S.imoveis = res[0] || []; S.inquilinos = res[1] || []; S.receb = res[2] || [];
+    S.imoveis = res[0] || []; S.inquilinos = res[1] || []; S.receb = res[2] || []; S.despInq = res[3] || [];
     if (!S.imoveis.some(i => i.id === S.imovelSel)) S.imovelSel = S.imoveis.length ? S.imoveis[0].id : null;
     const im = imovelAtual();
     S.despImovel = im ? (await q(sb.from('despesas').select('*').eq('categoria', im.categoria).gte('data', ano + '-01-01').lte('data', ano + '-12-31').order('data', { ascending: false }))) || [] : [];
   } catch (e) { erro(e); }
 }
 const imovelAtual = () => S.imoveis.find(i => i.id === S.imovelSel) || null;
+const desdeTxt = d => 'desde ' + (d === hojeISO() ? 'hoje' : diaCurto(d));
 const nomeMesCurto = m => new Intl.DateTimeFormat('pt-PT', { month: 'long' }).format(new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1));
+const despPorId = id => S.despInq.find(x => x.id === id) || S.despImovel.find(x => x.id === id) || null;
 function referente(r) {
   if (r.tipo === 'renda') return 'Renda de ' + nomeMesCurto(r.mes_ref);
-  if (r.tipo === 'despesa') { const d = S.despImovel.find(x => x.id === r.despesa_id); return 'Reembolso · ' + (d ? (d.descricao || 'despesa sem descrição') : 'despesa apagada'); }
+  if (r.tipo === 'despesa') { const d = despPorId(r.despesa_id); return d ? (d.descricao || 'Despesa sem descrição') : 'Despesa apagada'; }
   return r.nota || 'Outro';
+}
+// Conta corrente do inquilino: o que deve (rendas desde o início + despesas a seu cargo) e quanto pagou de cada
+function contaInquilino(i) {
+  const pagos = S.receb.filter(r => r.inquilino_id === i.id);
+  const itens = [];
+  for (let m = i.inicio.slice(0, 8) + '01'; m <= mesAtual(); m = addMes(m, 1)) {
+    const pago = soma(pagos.filter(r => r.tipo === 'renda' && r.mes_ref === m), r => r.valor);
+    itens.push({ tipo: 'renda', mes: m, titulo: 'Renda de ' + nomeMesCurto(m), data: [m.slice(0, 8) + pad2(Math.min(i.dia_pagamento, ultimoDia(m))), i.inicio].sort()[1], valor: Number(i.renda), pago: pago });
+  }
+  S.despInq.filter(d => d.inquilino_id === i.id).forEach(d => {
+    const pago = soma(pagos.filter(r => r.tipo === 'despesa' && r.despesa_id === d.id), r => r.valor);
+    itens.push({ tipo: 'despesa', d: d, mes: d.data.slice(0, 8) + '01', titulo: d.descricao || 'Despesa', data: d.data, valor: Number(d.valor), pago: pago });
+  });
+  itens.forEach(x => { x.falta = r2(Math.max(0, x.valor - x.pago)); });
+  return { itens: itens.sort((a, b) => (a.data < b.data ? -1 : 1)), deve: soma(itens, x => x.falta), pagou: soma(pagos, r => r.valor) };
+}
+function linhaObrigacao(i, x) {
+  const pagoTudo = x.falta <= 0.005, atraso = !pagoTudo && x.data < hojeISO();
+  const sub = [diaCurto(x.data), pagoTudo ? 'pago ✓' : x.pago > 0 ? 'pagou ' + fmt(x.pago) + ', falta ' + fmt(x.falta) : atraso ? 'em atraso' : 'por pagar'];
+  return h('div', { class: 'lrow' },
+    h('button', { type: 'button', class: 'rmain linkrow', onclick: () => (x.tipo === 'despesa' ? abrirDespesa(x.d) : abrirInquilino(i)) },
+      h('div', { class: 'rtitle', text: x.titulo }),
+      h('div', { class: 'rsub' + (atraso ? ' warn' : ''), text: sub.join(' · ') })),
+    h('div', { class: 'rval' + (pagoTudo ? ' pos' : atraso ? ' neg' : ''), text: fmt(x.valor) }),
+    pagoTudo ? null : h('button', { type: 'button', class: 'mini', text: 'Pagou', 'aria-label': 'Pagou: ' + x.titulo + ' (' + i.nome + ')',
+      onclick: () => abrirRecebimento(null, x.tipo === 'renda' ? { tipo: 'renda', inquilino: i, mes_ref: x.mes, valor: x.falta } : { tipo: 'despesa', inquilino: i, despesa: x.d, valor: x.falta }) }));
 }
 function viewInquilinos() {
   if (S.imoveis == null) return carregando();
-  if (!S.imoveis.length) return [vazio('Regista o que os inquilinos te pagam e vê o balanço do imóvel: rendas e reembolsos menos as despesas da categoria do imóvel.', 'Configurar imóvel', () => abrirImovel(null))];
+  if (!S.imoveis.length) return [vazio('Regista o inquilino, o que ele tem de pagar (renda, água, luz…) e o que já pagou. O balanço do imóvel faz-se sozinho.', 'Configurar imóvel', () => abrirImovel(null))];
   const im = imovelAtual(), m = S.mes, ano = m.slice(0, 4);
   const out = [];
   if (S.imoveis.length > 1) out.push(h('div', { class: 'chips scroll', role: 'group', 'aria-label': 'Imóvel' }, S.imoveis.map(i => h('button', {
     type: 'button', class: 'chip', text: i.nome, 'aria-pressed': String(i.id === S.imovelSel), onclick: async () => { S.imovelSel = i.id; await carregarImoveis(); render(); }
   }))));
-  // O balanço começa na data de início do primeiro inquilino: o que é anterior não conta
   const doImovel = S.inquilinos.filter(i => i.imovel_id === im.id);
-  const inicio = doImovel.length ? doImovel.map(i => i.inicio).sort()[0] : null;
-  const rec = S.receb.filter(r => r.imovel_id === im.id && inicio && r.data >= inicio);
-  const desp = inicio ? S.despImovel.filter(d => d.data >= inicio) : [];
+  if (!doImovel.length) {
+    out.push(group(h('div', { class: 'hero' }, h('div', { class: 'k', text: im.nome }))),
+      vazio('Falta o inquilino: o nome, a data de início e a renda.', 'Adicionar inquilino', () => abrirInquilino(null)));
+    return out;
+  }
+  // Cada inquilino: o que deve e o que pagou (conta corrente)
+  doImovel.forEach(i => {
+    const c = contaInquilino(i);
+    const doMes = c.itens.filter(x => x.mes === m), antes = c.itens.filter(x => x.mes < m && x.falta > 0.005);
+    out.push(group(h('div', { class: 'hero' },
+      h('div', { class: 'k', text: i.nome + ' · ' + desdeTxt(i.inicio) + ' · ' + fmt(i.renda) + '/mês' }),
+      h('div', { class: 'big' + (c.deve > 0.005 ? ' neg' : ' pos'), text: c.deve > 0.005 ? 'Deve ' + fmt(c.deve) : 'Tem tudo pago' }),
+      h('div', { class: 'k', text: 'Já pagou ' + fmt(c.pagou) + ' no total' }),
+      h('div', { class: 'linha-acoes', style: 'margin:8px 0 0' },
+        h('button', { type: 'button', class: 'link b', text: 'Cobrar despesa', onclick: () => abrirCobranca(i) }),
+        h('button', { type: 'button', class: 'link b', text: 'Editar', 'aria-label': 'Editar inquilino ' + i.nome, onclick: () => abrirInquilino(i) })))));
+    if (antes.length) out.push(glabel('Em falta de meses anteriores'), lista(antes.map(x => linhaObrigacao(i, x))));
+    out.push(glabel(cap(mesMin(m)) + ' · o que ' + i.nome + ' tem de pagar'));
+    out.push(doMes.length ? lista(doMes.map(x => linhaObrigacao(i, x)))
+      : hint(m < i.inicio.slice(0, 8) + '01' ? 'O contrato começa a ' + diaLongo(i.inicio) + '.' : 'Nada para pagar neste mês.'));
+  });
+  out.push(hint('«Cobrar despesa» atribui ao inquilino uma despesa que ele te tem de pagar (água, luz…). «Pagou» regista o que ele te deu.'));
+
+  // Balanço do imóvel (desde o início do contrato)
+  const inicio = doImovel.map(i => i.inicio).sort()[0];
+  const rec = S.receb.filter(r => r.imovel_id === im.id && r.data >= inicio && r.data.slice(0, 4) === ano);
+  const desp = S.despImovel.filter(d => d.data >= inicio);
   const recAno = soma(rec, r => r.valor), despAno = soma(desp, d => d.valor), balAno = r2(recAno - despAno);
-  const desde = inicio && inicio > ano + '-01-01' ? ' (desde ' + diaCurto(inicio) + ')' : '';
-  const recMes = rec.filter(r => r.data.slice(0, 7) === m.slice(0, 7)), despMes = desp.filter(d => d.data.slice(0, 7) === m.slice(0, 7));
-  out.push(group(h('div', { class: 'hero' },
-      h('div', { class: 'k', text: im.nome + ' · balanço de ' + ano + desde }),
+  out.push(glabel('Balanço de ' + im.nome), group(h('div', { class: 'hero' },
+      h('div', { class: 'k', text: ano + (inicio > ano + '-01-01' ? ' · ' + desdeTxt(inicio) : '') }),
       h('div', { class: 'big ' + (balAno >= 0 ? 'pos' : 'neg'), text: (balAno > 0 ? '+' : '') + fmt(balAno) })),
-    kv('Recebido', fmt(recAno), 'pos'), kv('Despesas', '− ' + fmt(despAno))),
-    hint(inicio ? 'Conta a partir de ' + diaLongo(inicio) + ', o início do contrato. Antes de impostos: as rendas pagam IRS (categoria F). As despesas são as da categoria «' + im.categoria + '».'
-      : 'O balanço começa na data de início do primeiro inquilino. Adiciona-o abaixo.'));
-  const balMes = r2(soma(recMes, r => r.valor) - soma(despMes, d => d.valor));
-  out.push(glabel(cap(mesMin(m))), group(kv('Recebido', fmt(soma(recMes, r => r.valor)), 'pos'), kv('Despesas', '− ' + fmt(soma(despMes, d => d.valor))),
-    kv('Balanço', (balMes > 0 ? '+' : '') + fmt(balMes), 'strong' + (balMes < 0 ? ' neg' : ''))));
-  // Inquilinos e a renda do mês
-  const ativos = doImovel.filter(i => (!i.fim || i.fim >= m) && i.inicio <= m.slice(0, 8) + pad2(ultimoDia(m)));
-  out.push(glabel('Inquilinos'));
-  if (!ativos.length) out.push(doImovel.length ? hint('O contrato começa a ' + diaLongo(inicio) + '.') : vazio('Ainda sem inquilino neste imóvel.', 'Adicionar inquilino', () => abrirInquilino(null)));
-  else out.push(lista(ativos.map(i => {
-    const pagaMes = soma(rec.filter(r => r.inquilino_id === i.id && r.tipo === 'renda' && r.mes_ref === m), r => r.valor);
-    const venc = m.slice(0, 8) + pad2(Math.min(i.dia_pagamento, ultimoDia(m)));
-    const estado = pagaMes >= Number(i.renda) ? 'Renda de ' + nomeMesCurto(m) + ' recebida ✓' : pagaMes > 0 ? 'Recebido ' + fmt(pagaMes) + ' de ' + fmt(i.renda) : (venc < hojeISO() ? 'Renda em atraso (dia ' + i.dia_pagamento + ')' : 'Renda vence dia ' + i.dia_pagamento);
-    return h('div', { class: 'lrow' },
-      h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirInquilino(i) },
-        h('div', { class: 'rtitle', text: i.nome }),
-        h('div', { class: 'rsub' + (pagaMes < Number(i.renda) && venc < hojeISO() ? ' warn' : ''), text: fmt(i.renda) + '/mês · desde ' + diaCurto(i.inicio) + ' · ' + estado })),
-      pagaMes >= Number(i.renda) ? null : h('button', { type: 'button', class: 'mini', text: 'Recebi', 'aria-label': 'Recebi: renda de ' + i.nome,
-        onclick: () => abrirRecebimento(null, { tipo: 'renda', inquilino: i, mes_ref: m, valor: r2(Number(i.renda) - pagaMes) }) }));
-  })));
-  out.push(h('div', { class: 'linha-acoes' },
-    h('button', { type: 'button', class: 'link b', text: 'Novo inquilino', onclick: () => abrirInquilino(null) }),
-    h('button', { type: 'button', class: 'link b', text: 'Editar imóvel', onclick: () => abrirImovel(im) })));
-  out.push(glabel('Recebido em ' + mesMin(m)));
-  out.push(recMes.length ? lista(recMes.map(r => h('button', { type: 'button', class: 'lrow', onclick: () => abrirRecebimento(r) },
-    h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: referente(r) }),
-      h('div', { class: 'rsub', text: [diaCurto(r.data), (S.inquilinos.find(i => i.id === r.inquilino_id) || {}).nome, r.tipo !== 'outro' ? r.nota : null].filter(Boolean).join(' · ') })),
-    h('div', { class: 'rval pos', text: '+' + fmt(r.valor) }),
-    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }))))
-    : vazio('Nada recebido em ' + mesMin(m) + '.', 'Registar recebimento', () => abrirRecebimento(null, {})));
-  out.push(glabel('Despesas do imóvel em ' + mesMin(m)));
-  out.push(despMes.length ? lista(despMes.map(d => {
-    const reemb = soma(rec.filter(r => r.despesa_id === d.id), r => r.valor);
-    return h('button', { type: 'button', class: 'lrow', onclick: () => abrirDespesa(d) },
-      h('div', { class: 'rmain' }, h('div', { class: 'rtitle', text: d.descricao || d.comerciante || 'Sem descrição' }),
-        h('div', { class: 'rsub', text: [diaCurto(d.data), reemb > 0 ? (reemb >= Number(d.valor) ? 'reembolsada pelo inquilino' : 'reembolsado ' + fmt(reemb)) : null, d.pago ? null : 'por pagar'].filter(Boolean).join(' · ') })),
-      h('div', { class: 'rval', text: '− ' + fmt(d.valor) }),
-      h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
-  })) : hint('Sem despesas com a categoria «' + im.categoria + '» este mês. Regista-as em Despesas com essa categoria.'));
+    kv('Recebido', fmt(recAno), 'pos'), kv('Despesas do imóvel', '− ' + fmt(despAno))),
+    hint('Recebido menos as despesas com a categoria «' + im.categoria + '», desde o início do contrato. Antes de impostos: as rendas pagam IRS (categoria F).'));
+  out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Editar imóvel', onclick: () => abrirImovel(im) })));
   return out;
+}
+// Atribuir ao inquilino uma despesa que ele tem de pagar (nova ou já registada)
+function abrirCobranca(i) {
+  const im = imovelAtual();
+  const livres = S.despImovel.filter(d => !d.inquilino_id && d.data >= i.inicio);
+  const valor = h('input', { class: 'valorin', type: 'text', inputmode: 'decimal', placeholder: '0,00', 'aria-label': 'Valor a cobrar', 'aria-required': 'true' });
+  const desc = h('input', { class: 'ginput', type: 'text', maxlength: '80', autocapitalize: 'sentences', 'aria-label': 'Descrição', 'aria-required': 'true', placeholder: 'Ex.: Água de novembro' });
+  const data = h('input', { class: 'ginput', type: 'date', 'aria-label': 'Data', 'aria-required': 'true', value: hojeISO() });
+  const swPago = interruptor(true, 'Já paguei esta fatura');
+  const existente = h('select', { class: 'ginput', 'aria-label': 'Despesa já registada' }, h('option', { value: '', text: 'Escolher…' }),
+    livres.map(d => h('option', { value: String(d.id), text: (d.descricao || 'Sem descrição') + ' · ' + diaCurto(d.data) + ' · ' + fmt(d.valor) })));
+  const gNova = group(grow('Descrição', desc), grow('Data', data), grow('Já paguei esta fatura', swPago));
+  const gExist = group(grow('Despesa', existente));
+  const draw = v => { gNova.hidden = valor.hidden = v !== 'nova'; gExist.hidden = v !== 'existente'; };
+  const modo = escolha([['Nova', 'nova'], ['Já registada', 'existente']], 'nova', 'Despesa nova ou já registada', false, draw);
+  draw('nova');
+  let s;
+  s = sheet('Cobrar a ' + i.nome, [group(h('div', { class: 'pad' }, modo.el)), valor, gNova, gExist,
+    hint('Fica na conta de ' + i.nome + ' como «por pagar» até registares que pagou. Conta como despesa do imóvel (categoria «' + im.categoria + '»).')], async () => {
+    if (modo.valor() === 'existente') {
+      if (!existente.value) return s.erro(livres.length ? 'Escolhe a despesa.' : 'Não há despesas do imóvel por atribuir.', existente);
+      await q(sb.from('despesas').update({ inquilino_id: i.id }).eq('id', Number(existente.value)));
+    } else {
+      const v = validarValor(s, valor); if (v === null) return false;
+      if (!desc.value.trim()) return s.erro('Diz o que é (ex.: Água de novembro).', desc);
+      if (!data.value) return s.erro('Indica a data.', data);
+      await q(sb.from('despesas').insert({ valor: v, descricao: desc.value.trim(), data: data.value, categoria: im.categoria, pago: swPago.checked, inquilino_id: i.id }));
+    }
+    await carregarImoveis(); await recarregar(); toast('Cobrada a ' + i.nome);
+  });
+  valor.focus();
 }
 function abrirImovel(im) {
   const novo = !im;
@@ -653,6 +697,7 @@ function abrirImovel(im) {
   let s;
   s = sheet(novo ? 'Configurar imóvel' : 'Editar imóvel', [group(grow('Nome', nome), grow('Categoria das despesas', cat)),
     hint('As despesas com esta categoria contam como despesas do imóvel. Cria a categoria em Ajustes, se ainda não existir.'),
+    novo ? null : h('button', { type: 'button', class: 'btn', text: 'Adicionar outro inquilino', onclick: () => { s.fechar(); abrirInquilino(null); } }),
     novo ? null : botaoApagar('Apagar imóvel', 'Apagar «' + im.nome + '»?', 'Apaga também os inquilinos e os recebimentos registados. As despesas não são apagadas.', async () => {
       await q(sb.from('imoveis').delete().eq('id', im.id)); s.fechar(); await carregarImoveis(); render(); toast('Imóvel apagado');
     }, () => s)], async () => {
@@ -702,9 +747,11 @@ function abrirRecebimento(r, preset) {
   const inq = h('select', { class: 'ginput', 'aria-label': 'Inquilino' }, h('option', { value: '', text: '—' }),
     inqs.map(i => h('option', { value: String(i.id), text: i.nome, selected: i.id === inqIni })));
   const mesRef = h('input', { class: 'ginput', type: 'month', 'aria-label': 'Renda do mês', value: (r && r.mes_ref ? r.mes_ref : (preset.mes_ref || S.mes)).slice(0, 7) });
+  const despIni = r ? r.despesa_id : preset.despesa ? preset.despesa.id : null;
+  const listaD = S.despInq.concat(S.despImovel.filter(d => !S.despInq.some(x => x.id === d.id)));
   const despSel = h('select', { class: 'ginput', 'aria-label': 'Despesa', }, h('option', { value: '', text: 'Escolher…' }),
-    S.despImovel.map(d => h('option', { value: String(d.id), text: (d.descricao || 'Sem descrição') + ' · ' + diaCurto(d.data) + ' · ' + fmt(d.valor), selected: r && r.despesa_id === d.id })));
-  despSel.addEventListener('change', () => { const d = S.despImovel.find(x => String(x.id) === despSel.value); if (d && !valor.value) valor.value = toInput(d.valor); });
+    listaD.map(d => h('option', { value: String(d.id), text: (d.descricao || 'Sem descrição') + ' · ' + diaCurto(d.data) + ' · ' + fmt(d.valor), selected: d.id === despIni })));
+  despSel.addEventListener('change', () => { const d = listaD.find(x => String(x.id) === despSel.value); if (d && !valor.value) valor.value = toInput(d.valor); });
   const nota = h('input', { class: 'ginput', type: 'text', maxlength: '120', placeholder: 'Opcional (ex.: MB Way)', 'aria-label': 'Nota', value: r ? (r.nota || '') : '' });
   const rMes = grow('Renda do mês', mesRef), rDesp = grow('Despesa', despSel);
   const tipoIni = r ? r.tipo : (preset.tipo || 'renda');
@@ -712,7 +759,7 @@ function abrirRecebimento(r, preset) {
   const tipo = escolha([['Renda', 'renda'], ['Despesa', 'despesa'], ['Outro', 'outro']], tipoIni, 'Referente a', false, draw);
   draw(tipoIni);
   let s;
-  s = sheet(novo ? 'Recebimento' : 'Editar recebimento', [valor, h('div', { class: 'split', text: 'recebido · ' + im.nome }),
+  s = sheet(novo ? (preset.inquilino ? preset.inquilino.nome + ' pagou' : 'Recebimento') : 'Editar recebimento', [valor, h('div', { class: 'split', text: 'recebido · ' + im.nome }),
     glabel('Referente a', 'h3'), group(h('div', { class: 'pad' }, tipo.el)),
     group(rMes, rDesp, grow('Inquilino', inq), grow('Data', data), grow('Nota', nota)),
     novo ? null : botaoApagar('Apagar recebimento', 'Apagar este recebimento?', referente(r) + ' · ' + fmt(r.valor) + '. Não dá para desfazer.', async () => {
@@ -1265,7 +1312,7 @@ function irPara(t) {
 function render() {
   if (!S.user || S.bloqueado) return;
   const views = { pagar: viewPagar, despesas: viewDespesas, comum: viewComum, inquilinos: viewInquilinos, agenda: viewAgenda, fixas: viewFixas, ajustes: viewAjustes };
-  const acoes = { pagar: () => abrirDespesa(), despesas: () => abrirDespesa(), comum: S.casal ? () => abrirDespesa(null, { comum: true }) : null, inquilinos: S.imoveis && S.imoveis.length ? () => abrirRecebimento(null, {}) : null, agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
+  const acoes = { pagar: () => abrirDespesa(), despesas: () => abrirDespesa(), comum: S.casal ? () => abrirDespesa(null, { comum: true }) : null, inquilinos: null, agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
   const rotulos = { pagar: 'Nova despesa', despesas: 'Nova despesa', comum: 'Nova despesa em comum', inquilinos: 'Novo recebimento', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
   const botoes = h('div', { class: 'acts' },
     S.tab === 'pagar' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
@@ -1458,7 +1505,7 @@ async function entrar(user) {
 
 sb.auth.onAuthStateChange(ev => {
   if (ev === 'SIGNED_OUT') {
-    S.user = null; S.config = null; S.despesas = []; S.atrasados = []; S.fixas = []; S.eventos = []; S.acertos = []; S.casal = null; S.imoveis = null; S.inquilinos = []; S.receb = []; S.despImovel = []; S.imovelSel = null; S.diaSel = null;
+    S.user = null; S.config = null; S.despesas = []; S.atrasados = []; S.fixas = []; S.eventos = []; S.acertos = []; S.casal = null; S.imoveis = null; S.inquilinos = []; S.receb = []; S.despImovel = []; S.despInq = []; S.imovelSel = null; S.diaSel = null;
     S.bloqueado = false;
     setTimeout(() => renderLogin(false), 0);
   }

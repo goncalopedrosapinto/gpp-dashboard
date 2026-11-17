@@ -415,14 +415,8 @@ function ferramentas(page, quem) {
   await page.click('button:has-text("Fechar")'); await page.waitForSelector('h1:has-text("Por pagar")');
   check((await G.texto()).includes('Débito direto · CGD'), '«Por pagar» mostra de que conta sai o débito');
 
-  // ===== Inquilinos =====
+  // ===== Inquilinos (conta corrente) =====
   console.log('Inquilinos');
-  await G.tab('Despesas');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Valor"]', '20');
-  await page.fill('.sheet [aria-label="Descrição"]', 'Água Esmoriz');
-  await page.click('.sheet .chip:text-is("Casa Esmoriz")');
-  await G.guardar();
   await bd("insert into despesas (owner, data, valor, descricao, categoria) values ($1, current_date - 3, 644.30, 'Obras antes do contrato', 'Casa Esmoriz')", [USER.id]);
   await G.tab('Inquilinos');
   await page.click('button:has-text("Configurar imóvel")'); await page.waitForSelector('dialog.sheet[open]');
@@ -431,26 +425,32 @@ function ferramentas(page, quem) {
   await G.guardar();
   await G.toastTem('Imóvel configurado');
   await page.click('button:has-text("Adicionar inquilino")'); await page.waitForSelector('dialog.sheet[open]');
-  await page.fill('.sheet [aria-label="Renda mensal"]', '650');
-  await page.fill('.sheet [aria-label="Nome do inquilino"]', 'Ana');
   check(await page.$('.sheet [aria-label="Saída"]') === null && (await page.inputValue('.sheet [aria-label="Data de início"]')) === hoje, 'inquilino: nome e data de início (hoje), sem data de saída');
+  await page.fill('.sheet [aria-label="Nome do inquilino"]', 'Ana');
+  await page.fill('.sheet [aria-label="Renda mensal"]', '650');
   await G.auditar('novo inquilino');
   await G.guardar();
-  await page.click('[aria-label="Recebi: renda de Ana"]'); await page.waitForSelector('dialog.sheet[open]');
-  check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '650,00', '«Recebi» já vem com a renda (650 €) e o mês');
-  await G.auditar('recebimento');
+  check(await G.tem('Deve 650,00') && (await page.$$('button:has-text("Novo inquilino")')).length === 0, 'Ana fica a dever a renda deste mês (650 €); não há botão para criar mais inquilinos no ecrã');
+  await page.click('[aria-label^="Pagou: Renda de"]'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '650,00' && await G.tem('Ana pagou'), '«Pagou» na renda já vem com 650 €');
+  await G.auditar('pagou renda');
   await G.guardar();
-  await G.toastTem('Recebimento registado');
-  check(await G.tem('recebida ✓'), 'renda do mês marcada como recebida');
-  await page.click('.addbtn'); await page.waitForSelector('dialog.sheet[open]');
-  await page.click('.sheet .chip:text-is("Despesa")');
-  await page.selectOption('.sheet [aria-label="Despesa"]', { index: 1 });
-  check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '20,00', 'escolher a despesa preenche o valor (20 €)');
+  check(await G.tem('Tem tudo pago'), 'depois de pagar a renda: tem tudo pago');
+  await page.click('button:has-text("Cobrar despesa")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Valor a cobrar"]', '20');
+  await page.fill('.sheet [aria-label="Descrição"]', 'Água Esmoriz');
+  await G.auditar('cobrar despesa');
   await G.guardar();
-  check(await G.tem('reembolsada pelo inquilino') && (await G.texto()).includes('Reembolso · Água Esmoriz'), 'reembolso ligado à despesa da água');
-  check((await G.semEsp()).includes('+650,00€') && !(await G.texto()).includes('Obras antes do contrato'), 'balanço só desde o início do contrato: 650 + 20 − 20 = +650,00 € (as obras de antes não contam)');
+  await G.toastTem('Cobrada a Ana');
+  check(await G.tem('Deve 20,00') && (await G.texto()).includes('Água Esmoriz'), 'água cobrada à Ana: deve 20 €');
+  await page.click('[aria-label="Pagou: Água Esmoriz (Ana)"]'); await page.waitForSelector('dialog.sheet[open]');
+  check((await page.inputValue('.sheet [aria-label="Valor recebido"]')) === '20,00', '«Pagou» na água já vem com 20 €');
+  await G.guardar();
+  check(await G.tem('Tem tudo pago') && (await G.texto()).includes('Já pagou 670,00'), 'Ana pagou renda e água: tem tudo pago, 670 € no total');
+  check((await G.semEsp()).includes('+650,00€'), 'balanço do imóvel desde o início: 670 − 20 = +650,00 € (as obras de antes não contam)');
   const rb = await bd("select tipo, mes_ref::text, despesa_id is not null d from recebimentos order by id");
-  check(rb.length === 2 && rb[0].tipo === 'renda' && rb[0].mes_ref === hoje.slice(0, 8) + '01' && rb[1].tipo === 'despesa' && rb[1].d, 'base de dados: renda do mês e reembolso da despesa');
+  const ag = (await bd("select inquilino_id is not null a, categoria from despesas where descricao = 'Água Esmoriz'"))[0];
+  check(rb.length === 2 && rb[0].tipo === 'renda' && rb[0].mes_ref === hoje.slice(0, 8) + '01' && rb[1].tipo === 'despesa' && rb[1].d && ag.a && ag.categoria === 'Casa Esmoriz', 'base de dados: renda do mês, água a cargo da Ana e o pagamento ligado a ela');
   await G.shot('06d-inquilinos');
   await G.auditar('inquilinos');
 
