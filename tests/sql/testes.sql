@@ -570,4 +570,82 @@ do $$ begin
 end $$;
 reset role;
 
+\echo '--- T21: tarefas, datas em portugues, captura pelo Atalho e registos ---'
+do $$ declare h date := '2026-11-20'; begin  -- sexta-feira
+  if ler_data_pt('Ligar ao seguro amanhã', h) <> '2026-11-21' then raise exception 'T21 falhou: amanhã'; end if;
+  if ler_data_pt('pagar IUC depois de amanha', h) <> '2026-11-22' then raise exception 'T21 falhou: depois de amanhã'; end if;
+  if ler_data_pt('Hoje: farmácia', h) <> h then raise exception 'T21 falhou: hoje'; end if;
+  if ler_data_pt('Revisão da mota na terça', h) <> '2026-11-24' then raise exception 'T21 falhou: terça'; end if;
+  if ler_data_pt('reunião sexta', h) <> '2026-11-27' then raise exception 'T21 falhou: sexta = próxima'; end if;
+  if ler_data_pt('IRS dia 12', h) <> '2026-12-12' then raise exception 'T21 falhou: dia 12 já passou → mês seguinte (%)', ler_data_pt('IRS dia 12', h); end if;
+  if ler_data_pt('jantar dia 28', h) <> '2026-11-28' then raise exception 'T21 falhou: dia 28'; end if;
+  if ler_data_pt('seguro dia 3 de março', h) <> '2027-03-03' then raise exception 'T21 falhou: dia 3 de março'; end if;
+  if ler_data_pt('aniversário 15/1', h) <> '2027-01-15' then raise exception 'T21 falhou: 15/1'; end if;
+  if ler_data_pt('consulta em 10 dias', h) <> '2026-11-30' then raise exception 'T21 falhou: em 10 dias'; end if;
+  if ler_data_pt('ver próxima semana', h) <> '2026-11-23' then raise exception 'T21 falhou: próxima semana'; end if;
+  if ler_data_pt('comprar lâmpadas', h) is not null then raise exception 'T21 falhou: sem data'; end if;
+  if ler_data_pt('vender 3/45', h) is not null then raise exception 'T21 falhou: 3/45 não é data'; end if;
+end $$;
+set role authenticated;
+set request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ declare t tarefas; n int; begin
+  perform garantir_config();
+  t := nova_tarefa('  Comprar lâmpadas  ');
+  if t.texto <> 'Comprar lâmpadas' or t.data is not null or t.origem <> 'app' then raise exception 'T21 falhou: nova_tarefa %', t; end if;
+  t := nova_tarefa('Ligar ao seguro amanhã');
+  if t.data <> hoje_lisboa() + 1 then raise exception 'T21 falhou: nova_tarefa com data'; end if;
+  begin perform nova_tarefa('   '); raise exception 'T21 falhou: tarefa vazia aceite';
+  exception when invalid_parameter_value then null; end;
+  update tarefas set feita = true where id = t.id;
+  if (select feita_em from tarefas where id = t.id) is null then raise exception 'T21 falhou: feita_em'; end if;
+  select count(*) into n from registos where departamento = 'operacoes';
+  if n <> 3 then raise exception 'T21 falhou: registos = %', n; end if;
+  if not exists (select 1 from registos where texto = 'Feita: Ligar ao seguro amanhã' and origem = 'app') then raise exception 'T21 falhou: registo de feita'; end if;
+  update tarefas set feita = false where id = t.id;
+  if (select feita_em from tarefas where id = t.id) is not null then raise exception 'T21 falhou: feita_em ficou'; end if;
+  begin update config set google_ics = 'https://evil.example.com/x.ics'; raise exception 'T21 falhou: url google estranho aceite';
+  exception when check_violation then null; end;
+  update config set google_ics = 'https://calendar.google.com/calendar/ical/abc%40gmail.com/private-123/basic.ics';
+end $$;
+reset role;
+select token_atalho as tk55 from config where owner = '55555555-5555-5555-5555-555555555555' \gset
+set role anon;
+set request.jwt.claim.sub = '';
+do $$ begin
+  begin perform capturar('errado', 'x'); raise exception 'T21 falhou: token errado';
+  exception when invalid_authorization_specification then null; end;
+end $$;
+select capturar(:'tk55', 'Pagar IUC sexta') as resposta \gset
+select :'resposta' like 'Guardado para %' as atalho_ok \gset
+\if :atalho_ok
+\else
+  \echo 'T21 falhou: resposta do atalho'
+  select 1/0;
+\endif
+select capturar(:'tk55', 'Ideia para o stand') = 'Guardado na caixa de entrada' as atalho_cx \gset
+\if :atalho_cx
+\else
+  \echo 'T21 falhou: caixa de entrada pelo atalho'
+  select 1/0;
+\endif
+do $$ begin
+  begin perform 1 from tarefas; raise exception 'T21 falhou: anon le tarefas';
+  exception when insufficient_privilege then null; end;
+end $$;
+reset role;
+set role authenticated;
+set request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  if (select count(*) from tarefas where origem = 'atalho') <> 2 then raise exception 'T21 falhou: tarefas do atalho'; end if;
+  if not exists (select 1 from registos where texto = 'Capturada pelo Atalho: Ideia para o stand') then raise exception 'T21 falhou: registo do atalho'; end if;
+end $$;
+set request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  if exists (select 1 from tarefas) or exists (select 1 from registos) then raise exception 'T21 falhou: Bia ve tarefas do Gonçalo'; end if;
+  begin insert into registos (owner, departamento, texto) values ('55555555-5555-5555-5555-555555555555', 'saude', 'x'); raise exception 'T21 falhou: escreveu no log de outro';
+  exception when insufficient_privilege then null; end;
+  raise notice 'tarefas e registos: OK';
+end $$;
+reset role;
+
 \echo 'TODOS OS TESTES PASSARAM'

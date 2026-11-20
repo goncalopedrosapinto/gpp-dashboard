@@ -47,8 +47,8 @@ function subDe(hdr) {
   try { const p = JSON.parse(Buffer.from(parts[1], 'base64url').toString()); return p.role === 'authenticated' ? p.sub : null; } catch (e) { return null; }
 }
 const ident = k => { if (!/^[a-z_][a-z0-9_]*$/.test(k)) throw new Error('identificador inválido ' + k); return '"' + k + '"'; };
-const ESCALARES = ['criar_casal', 'gerar_convite', 'aceitar_convite', 'definir_divisao', 'gerar_recorrentes', 'registar_apple_pay', 'registar_notificacao', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados'];
-const COMPOSTAS = ['garantir_config'];
+const ESCALARES = ['criar_casal', 'gerar_convite', 'aceitar_convite', 'definir_divisao', 'gerar_recorrentes', 'registar_apple_pay', 'registar_notificacao', 'criar_conta', 'ajustar_saldo', 'definir_principal', 'renovar_token_calendario', 'calendario_dados', 'capturar'];
+const COMPOSTAS = ['garantir_config', 'nova_tarefa'];
 const log = [];
 
 async function rest(method, p, search, headers, bodyText) {
@@ -134,6 +134,19 @@ async function rota(route) {
   }
   if (u.pathname === '/auth/v1/user') { const sub = subDe(hdr['authorization']); return json(200, userObj(USERS.find(x => x.id === sub) || USER)); }
   if (u.pathname === '/auth/v1/logout') return route.fulfill({ status: 204, body: '' });
+  if (u.pathname === '/functions/v1/google') {   // Edge Function simulada: dois eventos do Google
+    const sub = subDe(hdr['authorization']);
+    if (!sub) return json(401, { erro: 'Sessão em falta' });
+    const cfg = (await pool.query('select google_ics from config where owner = $1', [sub])).rows[0];
+    log.push('GET functions/google ' + u.search);
+    if (!cfg || !cfg.google_ics) return json(200, { ligado: false, eventos: [] });
+    const de = u.searchParams.get('de'), ate = u.searchParams.get('ate');
+    const evs = [
+      { id: 'g1', titulo: 'Jantar de anos do Rui', local: 'Aveiro', dia_inteiro: false, data: hoje, data_fim: hoje, hora_inicio: '20:00', hora_fim: '22:00' },
+      { id: 'g2', titulo: 'Aniversário da mãe', local: null, dia_inteiro: true, data: amanha, data_fim: amanha, hora_inicio: null, hora_fim: null }
+    ].filter(e => e.data <= ate && e.data_fim >= de);
+    return json(200, { ligado: true, eventos: evs });
+  }
   if (u.pathname.startsWith('/rest/v1/')) {
     const r = await rest(req.method(), u.pathname.slice(9), u.search, hdr, req.postData());
     log.push(req.method() + ' ' + u.pathname.slice(9) + u.search.slice(0, 60) + ' -> ' + r.status);
@@ -155,6 +168,7 @@ const EURN = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR'
 const eur = v => EURN.format(v).replace(/[\s  ]/g, '');
 const hoje = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
 const diaHoje = new Date().getDate();
+const amanha = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
 
 // Ferramentas por iPhone (cada pessoa tem o seu)
 function ferramentas(page, quem) {
@@ -249,8 +263,41 @@ function ferramentas(page, quem) {
   await G.pin('1111');
   check(await G.tem('PIN demasiado óbvio'), 'PIN óbvio recusado');
   await G.pin('1379'); await page.waitForSelector('h1:has-text("Confirma o PIN")'); await G.pin('1379');
-  await page.waitForSelector('h1:has-text("Por pagar")');
-  check((await page.$$('.tab')).length === 5 && !(await G.texto()).includes('Ganhos') && !(await G.texto()).includes('Disponível'), 'cinco separadores e nada de saldos nem ganhos');
+  await page.waitForSelector('h1:has-text("Hoje")');
+  check((await page.$$('.tab')).length === 6 && !(await G.texto()).includes('Ganhos') && !(await G.texto()).includes('Disponível'), 'seis separadores (abre em Hoje) e nada de saldos nem ganhos');
+
+  // ===== Hoje: captura, caixa de entrada e registo =====
+  console.log('Hoje');
+  check(await G.tem('O que ditares no botão Action sem data cai aqui'), 'hoje vazio: explica a caixa de entrada');
+  await G.shot('01b-hoje-vazio');
+  await G.auditar('hoje vazio');
+  await page.fill('#captura', 'Comprar lâmpadas'); await page.keyboard.press('Enter');
+  await G.toastTem('Na caixa de entrada');
+  check(await G.tem('Caixa de entrada (1)'), 'tarefa sem data vai para a caixa de entrada');
+  check((await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'captura', 'depois de guardar o cursor fica no campo, pronto para a próxima');
+  await page.fill('#captura', 'Ligar ao seguro amanhã'); await page.click('.captura button[type=submit]');
+  await G.toastTem('Guardada para');
+  const tSeg = await bdComo(USER.id, "select data::text d from tarefas where texto = 'Ligar ao seguro amanhã'");
+  check(tSeg.length === 1 && tSeg[0].d === amanha, '«amanhã» fica com a data de amanhã');
+  const tx7 = (await G.texto()).toLowerCase();
+  check(tx7.includes('próximos 7 dias') && tx7.indexOf('ligar ao seguro amanhã') > tx7.indexOf('próximos 7 dias'), 'tarefa de amanhã aparece nos próximos 7 dias');
+  await page.click('[aria-label="Marcar como feita: Comprar lâmpadas"]');
+  await G.toastTem('Feita');
+  check(await G.tem('Feita: Comprar lâmpadas'), 'registo: «Feita: Comprar lâmpadas»');
+  const tkAt = (await bd('select token_atalho from config where owner = $1', [USER.id]))[0].token_atalho;
+  const rAt = await page.evaluate(async ([b, tk]) => { const r = await fetch(b + '/rest/v1/rpc/capturar', { method: 'POST', headers: { apikey: 'x', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: tk, texto: 'Ideia para o stand' }) }); return r.json(); }, [BASE, tkAt]);
+  check(rAt === 'Guardado na caixa de entrada', 'Atalho do botão Action: responde «Guardado na caixa de entrada»');
+  await G.tab('Por pagar'); await G.tab('Hoje');
+  check(await G.tem('Ideia para o stand') && await G.tem('Capturada pelo Atalho: Ideia para o stand'), 'o que veio pelo Atalho aparece na caixa e no registo');
+  check(!(await page.$('[aria-label$=": Comprar lâmpadas"]')), 'tarefa feita sai da lista ao voltar');
+  await page.click('.rmain:has-text("Ideia para o stand")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Data"]', amanha);
+  await G.auditar('tarefa');
+  await G.guardar();
+  check(await G.tem('Caixa de entrada') && !(await G.texto()).toLowerCase().includes('caixa de entrada (') && (await G.texto()).toLowerCase().indexOf('ideia para o stand') < (await G.texto()).toLowerCase().indexOf('caixa de entrada'), 'dar data tira a tarefa da caixa de entrada (passa para os próximos 7 dias)');
+  await G.shot('01c-hoje');
+  await G.auditar('hoje');
+  await G.tab('Por pagar');
   check(await G.tem('Adicionar despesa fixa'), 'por pagar vazio sugere criar as despesas fixas');
   await G.shot('02-por-pagar-vazio');
   await G.auditar('por pagar vazio');
@@ -505,7 +552,9 @@ function ferramentas(page, quem) {
   await B.page.click('button[type=submit]');
   await B.page.waitForSelector('h1:has-text("Cria um PIN")');
   await B.pin('2580'); await B.page.waitForSelector('h1:has-text("Confirma o PIN")'); await B.pin('2580');
-  await B.page.waitForSelector('h1:has-text("Por pagar")');
+  await B.page.waitForSelector('h1:has-text("Hoje")');
+  check(!(await B.texto()).includes('Ideia para o stand') && !(await B.texto()).includes('Ligar ao seguro'), 'a Bia não vê as tarefas do Gonçalo');
+  await B.tab('Por pagar');
   check(!(await B.texto()).includes('Renda') && !(await B.texto()).includes('Supermercado'), 'antes do código a Bia não vê nada do Gonçalo');
   await B.tab('Em comum');
   await B.page.fill('[aria-label="Código de convite"]', 'ZZZZZZ');
@@ -545,7 +594,7 @@ function ferramentas(page, quem) {
   await G.pin('0000');
   check(await G.tem('Faltam 4 tentativas'), 'PIN errado: diz quantas tentativas faltam');
   await page.keyboard.type('1379');
-  await page.waitForSelector('h1:has-text("Por pagar")');
+  await page.waitForSelector('h1:has-text("Hoje")');
   await G.tab('Em comum');
   check(await G.tem('Estão acertados') && (await G.texto()).includes('Bia pagou-te') && (await G.texto()).includes('Jantar'), 'Gonçalo vê o jantar da Bia e o acerto dela');
   const saldos = await bdComo(USER.id, 'select nome, saldo::float8 s from casal_saldos order by ordem');
@@ -634,6 +683,30 @@ function ferramentas(page, quem) {
   await G.tab('Por pagar');
   await page.click('[aria-label="Ajustes"]');
   await G.auditar('ajustes');
+
+  // ===== Google Calendar (só leitura) =====
+  console.log('Google Calendar');
+  await page.click('.grow:has-text("Desligado") button:has-text("Ligar")'); await page.waitForSelector('dialog.sheet[open]');
+  await page.fill('.sheet [aria-label="Endereço secreto iCal"]', 'https://outro.site/cal.ics');
+  await page.click('.sheet .snav .link.b');
+  check(await G.tem('começa por https://calendar.google.com'), 'Google: endereço errado recusado com explicação');
+  await page.fill('.sheet [aria-label="Endereço secreto iCal"]', 'https://calendar.google.com/calendar/ical/goncalo%40gmail.com/private-abc123/basic.ics');
+  await G.auditar('google');
+  await G.guardar();
+  await G.toastTem('Google Calendar ligado');
+  check(await G.tem('Ligado · só leitura'), 'Ajustes: Google ligado');
+  check(!(await G.texto()).includes('private-abc123'), 'o endereço secreto não aparece no ecrã');
+  await page.click('button:has-text("Fechar")');
+  await G.tab('Hoje');
+  check(await G.tem('Jantar de anos do Rui') && (await G.texto()).includes('20:00–22:00'), 'Hoje mostra o evento do Google de hoje (20:00–22:00)');
+  check(await G.tem('Aniversário da mãe'), 'Hoje mostra o aniversário de amanhã do Google nos próximos 7 dias');
+  await G.shot('14-hoje-google');
+  await G.tab('Agenda');
+  await page.click('.cal-dia.hoje');
+  check(await G.tem('Jantar de anos do Rui') && (await G.texto()).includes('Google'), 'Agenda mostra o evento do Google');
+  await G.auditar('agenda com google');
+  await G.tab('Por pagar');
+  await page.click('[aria-label="Ajustes"]');
   await page.click('button:has-text("Terminar sessão")');
   await page.waitForSelector('form.login', { timeout: 5000 });
   check(true, 'terminar sessão volta ao ecrã de entrada');

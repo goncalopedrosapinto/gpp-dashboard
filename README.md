@@ -30,7 +30,14 @@ git commit -am "..." && git push   # o GitHub Pages publica sozinho (1-2 min)
 
 ## Regras de negócio
 
-**v2 (atual)**
+**v3 · Life Management System (em construção, semana 1 de 4)**
+
+- **Hoje** (ecrã inicial): campo de captura, o que é para hoje (tarefas atrasadas e de hoje, pagamentos que vencem, agenda, Google), próximos 7 dias, caixa de entrada (tarefas sem data) e o registo do departamento Operações.
+- **Tarefas** (`tarefas`): `ler_data_pt` lê «hoje», «amanhã», «depois de amanhã», dias da semana (sempre o próximo; no próprio dia, a semana seguinte), «dia 12 [de março]» (já passou → mês/ano seguinte), «12/12», «em 3 dias», «próxima semana» (segunda). Sem data → caixa de entrada. `nova_tarefa(texto)` na app; `capturar(token, texto)` pelo Atalho do botão Action (mesmo `token_atalho`).
+- **Registos** (`registos`): o log de cada departamento (operacoes, financas, carreira, saude, casa, claude). Capturar e fazer uma tarefa escrevem uma linha sozinhos (trigger).
+- **Google Calendar** (só leitura): o endereço secreto iCal fica em `config.google_ics` (só `https://calendar.google.com/calendar/ical/….ics`); a Edge Function `google` lê-o com a sessão do utilizador (RLS) e devolve as ocorrências (`?de=&ate=`, ≤ 70 dias, fuso de Lisboa, recorrências e exceções pelo ical.js). O endereço nunca vai para o browser.
+
+**v2**
 
 - **Por pagar** (ecrã principal): despesas não pagas, em atraso, dos próximos 7 dias e do resto do mês. O visto (círculo) marca como paga e guarda a data; tocar outra vez desmarca. Uma fatura estimada (fixa variável) pede o valor real antes de ficar paga. O visto é sempre manual.
 - **Despesas**: só minhas ou em comum. Uma despesa nova de hoje vem paga; com data futura fica por pagar. Wallet e notificações do banco entram pagas e só minhas, em «Por rever».

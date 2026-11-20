@@ -4,10 +4,10 @@
 // ===================== Configuração =====================
 const SUPABASE_URL = 'https://klmjdjhvsxvopctgmhyu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_L3QfJtwa_wYBCsHN4uzgXQ_rcp52nL8';
-const VERSAO = 'v2.9 · nov 2026';
+const VERSAO = 'v3.0 · nov 2026';
 const CATEGORIAS = ['Casa', 'Supermercado', 'Restauração', 'Transportes', 'Saúde', 'Lazer', 'Compras', 'Subscrições', 'Outros'];
-const TITULOS = { pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', inquilinos: 'Inquilinos', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
-const TABS = ['pagar', 'despesas', 'comum', 'inquilinos', 'agenda'];
+const TITULOS = { hoje: 'Hoje', pagar: 'Por pagar', despesas: 'Despesas', comum: 'Em comum', inquilinos: 'Inquilinos', agenda: 'Agenda', fixas: 'Fixas', ajustes: 'Ajustes' };
+const TABS = ['hoje', 'pagar', 'despesas', 'comum', 'inquilinos', 'agenda'];
 
 const app = document.getElementById('app');
 if (!window.supabase || !window.supabase.createClient) {
@@ -19,8 +19,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 });
 
 const S = {
-  user: null, config: null, tab: 'pagar', mes: null, filtro: 'todas', loading: false, seq: 0,
+  user: null, config: null, tab: 'hoje', mes: null, filtro: 'todas', loading: false, seq: 0,
   despesas: [], atrasados: [], fixas: [], eventos: [], acertos: [], casal: null, categorias: [], contas: [], imoveis: null, inquilinos: [], receb: [], despImovel: [], imovelSel: null, diaSel: null,
+  tarefas: null, registos: [], eventosSemana: [], capturaTxt: '',
+  google: { eventos: new Map(), feitos: {}, pend: {}, erro: null },
   bloqueado: false, saiuEm: 0, avisoLogin: null
 };
 
@@ -50,6 +52,7 @@ function append(el, kid) {
 }
 const SVGNS = 'http://www.w3.org/2000/svg';
 const ICONS = {
+  hoje: ['M10 6h10', 'M10 12h10', 'M10 18h10', 'M3.5 6l1.5 1.5L7.5 5', 'M3.5 12l1.5 1.5L7.5 11', 'M4.5 18h1'],
   pagar: ['M9 11l3 3 8-8', 'M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9'],
   comum: ['M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1', 'M16 3.13a4 4 0 0 1 0 7.75', 'M22 21v-1a6 6 0 0 0-4-5.65'],
   visto: ['M5 12.5l4.5 4.5L19 7.5'],
@@ -304,7 +307,7 @@ async function carregarFixas() {
     S.fixas = await q(sb.from('despesas_recorrentes').select('*').order('ativa', { ascending: false }).order('dia_vencimento').order('nome'));
   } catch (e) { erro(e); }
 }
-async function recarregar() { await carregarMes(); if (S.tab === 'inquilinos') await carregarImoveis(); render(); }
+async function recarregar() { await carregarMes(); if (S.tab === 'inquilinos') await carregarImoveis(); if (S.tab === 'hoje') await carregarHoje(); render(); }
 async function carregarContas() {
   try { S.contas = (await q(sb.from('contas').select('id, nome').eq('ativa', true).order('ordem').order('id'))) || []; } catch (e) { erro(e); }
 }
@@ -821,6 +824,15 @@ function viewAjustes() {
     ),
     hint('As compras que chegam pela Wallet ou pelo banco entram como pagas e só tuas, em «Por rever». Abre-as para pôr a categoria ou passá-las para «em comum». O token é a tua chave pessoal: não o partilhes.'),
 
+    glabel('Google Calendar'),
+    group(grow(h('span', { class: 'glab', text: c.google_ics ? 'Ligado · só leitura' : 'Desligado' }),
+      h('button', { type: 'button', class: 'link b', text: c.google_ics ? 'Mudar' : 'Ligar', onclick: abrirGoogle }))),
+    hint('Os teus eventos do Google aparecem em Hoje e na Agenda. A app nunca escreve no Google.'),
+
+    glabel('Botão Action · tarefas por voz'),
+    group(linhaCopiar('URL tarefa', SUPABASE_URL + '/rest/v1/rpc/capturar', 'rpc/capturar'),
+      grow('Passo a passo', h('button', { type: 'button', class: 'link b', text: 'Ver passos', onclick: abrirPassosAtalho }))),
+
     ...blocoFeeds(),
 
     glabel('Segurança'),
@@ -1076,7 +1088,7 @@ function abrirFixa(x) {
 
 // ===================== Agenda =====================
 const AGENDAS = ['pessoal', 'trabalho', 'bia', 'outro'];
-const nomeAg = a => (a === 'bia' ? ELA() : a === 'pag' ? 'Pagamentos' : ({ pessoal: 'Pessoal', trabalho: 'Trabalho', outro: 'Outro' })[a] || a);
+const nomeAg = a => (a === 'bia' ? ELA() : a === 'pag' ? 'Pagamentos' : a === 'google' ? 'Google' : ({ pessoal: 'Pessoal', trabalho: 'Trabalho', outro: 'Outro' })[a] || a);
 const REPETE = [['Não repete', 'nunca'], ['Semanal', 'semanal'], ['Mensal', 'mensal'], ['Anual', 'anual']];
 const ALERTAS = [['Sem alerta', null], ['Na hora', 0], ['15 min antes', 15], ['1 h antes', 60], ['1 dia antes', 1440]];
 const hhmm = t => (t ? String(t).slice(0, 5) : '');
@@ -1107,6 +1119,7 @@ function itensDoMes(m) {
     const iso = m.slice(0, 8) + pad2(d);
     S.eventos.forEach(ev => { const k = posicaoEm(ev, iso); if (k >= 0) add(iso, { tipo: 'evento', agenda: ev.agenda, ev: ev, k: k, dur: duracao(ev) }); });
   }
+  for (let d = 1; d <= ud; d++) { const iso = m.slice(0, 8) + pad2(d); googleEm(iso).forEach(e => add(iso, { tipo: 'google', agenda: 'google', g: e, iso: iso })); }
   S.fixas.filter(f => f.ativa && f.para_conta_id == null).forEach(f => {
     const iso = m.slice(0, 8) + pad2(Math.min(f.dia_vencimento, ud));
     const lanc = S.despesas.find(d => d.recorrente_id === f.id);
@@ -1114,7 +1127,7 @@ function itensDoMes(m) {
   });
   return res;
 }
-const chaveOrdem = it => (it.tipo === 'pagamento' ? '0' : it.ev.dia_inteiro || !it.ev.hora_inicio || it.k > 0 ? '1' : '2' + it.ev.hora_inicio);
+const chaveOrdem = it => (it.tipo === 'pagamento' ? '0' : it.tipo === 'google' ? (it.g.dia_inteiro || it.g.data < it.iso ? '1' : '2' + it.g.hora_inicio) : it.ev.dia_inteiro || !it.ev.hora_inicio || it.k > 0 ? '1' : '2' + it.ev.hora_inicio);
 // Horário de um evento num dos seus dias (vários dias: começa / dia n de N / termina)
 function horarioDia(ev, k, dur) {
   if (!dur) return horario(ev);
@@ -1125,6 +1138,7 @@ function horarioDia(ev, k, dur) {
 }
 
 function linhaItemAgenda(it) {
+  if (it.tipo === 'google') return linhaGoogle(it.g, it.iso);
   if (it.tipo === 'pagamento') {
     const f = it.f;
     return h('button', { type: 'button', class: 'lrow', onclick: () => abrirFixa(f) },
@@ -1162,13 +1176,15 @@ function viewAgenda() {
       }, h('span', { class: 'cal-num', text: String(i + 1) }),
         h('span', { class: 'cal-pontos', 'aria-hidden': 'true' }, cores.map(c => h('i', { class: 'dot ag-' + c }))));
     }));
+  if (S.config && S.config.google_ics) carregarGoogle(m, m.slice(0, 8) + pad2(ud));
   const legenda = h('div', { class: 'legenda', 'aria-hidden': 'true' },
-    AGENDAS.concat(['pag']).map(a => h('span', null, h('i', { class: 'dot ag-' + a }), nomeAg(a))));
+    AGENDAS.concat(['pag'], S.config && S.config.google_ics ? ['google'] : []).map(a => h('span', null, h('i', { class: 'dot ag-' + a }), nomeAg(a))));
   const itens = (porDia[S.diaSel] || []).slice().sort((a, b) => (chaveOrdem(a) < chaveOrdem(b) ? -1 : 1));
   const out = [group(h('div', { class: 'cal-wrap' }, grid)), legenda, glabel(diaLongo(S.diaSel))];
   if (S.loading && !S.eventos.length) out.push(...carregando());
   else if (!itens.length) out.push(vazio('Nada marcado para este dia.', 'Novo evento', () => abrirEvento(null, S.diaSel)));
   else out.push(lista(itens.map(linhaItemAgenda)));
+  if (S.google.erro) out.push(hint('Google Calendar: ' + S.google.erro, 'warn'));
   return out;
 }
 
@@ -1270,6 +1286,241 @@ function blocoFeeds() {
   ];
 }
 
+// ===================== Hoje (Life Management System · Operações) =====================
+async function carregarHoje() {
+  const hoje = hojeISO(), semana = somaDias(hoje, 7);
+  try {
+    const r = await Promise.all([
+      q(sb.from('tarefas').select('*').eq('feita', false).order('data').order('id')),
+      q(sb.from('registos').select('*').eq('departamento', 'operacoes').order('em', { ascending: false }).limit(8)),
+      q(sb.from('eventos').select('*').eq('repete', 'nunca').lte('data', semana).gte('data_fim', hoje))
+    ]);
+    // Uma tarefa que acabaste de marcar fica com ✓ até saíres do ecrã
+    const novas = r[0] || [], feitasAgora = (S.tarefas || []).filter(t => t.feita && !novas.some(x => x.id === t.id));
+    S.tarefas = novas.concat(feitasAgora);
+    S.registos = r[1] || [];
+    S.eventosSemana = r[2] || [];
+  } catch (e) { erro(e); if (!S.tarefas) S.tarefas = []; }
+  carregarGoogle(hoje, semana);
+}
+
+// Google Calendar (só leitura) — lido pela Edge Function «google» com a sessão do utilizador
+async function carregarGoogle(de, ate) {
+  const G = S.google, k = de + '|' + ate;
+  if (!S.config || !S.config.google_ics || G.pend[k] || (G.feitos[k] && Date.now() - G.feitos[k] < 5 * 60000)) return;
+  G.pend[k] = true;
+  try {
+    const r = await sb.functions.invoke('google?de=' + de + '&ate=' + ate, { method: 'GET' });
+    if (S.google !== G) return;   // desligado ou sessão terminada entretanto
+    if (r.error) {
+      let msg = 'Não foi possível ler o Google Calendar.';
+      try { const b = await r.error.context.json(); if (b && b.erro) msg = b.erro; } catch (e) { /* sem corpo */ }
+      G.erro = msg;
+    } else {
+      for (const [id, e] of G.eventos) if (e.data <= ate && e.data_fim >= de) G.eventos.delete(id);
+      ((r.data && r.data.eventos) || []).forEach(e => G.eventos.set(e.id, e));
+      G.erro = null; G.feitos[k] = Date.now();
+    }
+  } catch (e) { G.erro = 'Não foi possível ler o Google Calendar.'; }
+  finally { delete G.pend[k]; if (S.google === G && S.user && (S.tab === 'hoje' || S.tab === 'agenda')) render(); }
+}
+function limparGoogle() { S.google = { eventos: new Map(), feitos: {}, pend: {}, erro: null }; }
+const ordemGoogle = e => (e.dia_inteiro ? '0' : '1' + e.hora_inicio);
+const googleEm = iso => [...S.google.eventos.values()].filter(e => e.data <= iso && e.data_fim >= iso)
+  .sort((a, b) => (ordemGoogle(a) < ordemGoogle(b) ? -1 : 1));
+function horarioGoogle(e, iso) {
+  const dur = diasEntre(e.data, e.data_fim), k = diasEntre(e.data, iso);
+  if (e.dia_inteiro) return 'Todo o dia' + (dur ? ' · Dia ' + (k + 1) + ' de ' + (dur + 1) : '');
+  return e.hora_inicio + (e.hora_fim && !dur ? '–' + e.hora_fim : '');
+}
+function linhaGoogle(e, iso, comDia) {
+  return h('div', { class: 'lrow' },
+    h('span', { class: 'barra ag-google', 'aria-hidden': 'true' }),
+    h('div', { class: 'rmain' },
+      h('div', { class: 'rtitle', text: e.titulo }),
+      h('div', { class: 'rsub', text: [comDia ? diaCurto(iso) : null, horarioGoogle(e, iso), e.local, 'Google'].filter(Boolean).join(' · ') })));
+}
+// Eventos da agenda da app num dia (mês carregado + eventos únicos da semana)
+function eventosEm(iso) {
+  const vistos = new Set(), out = [];
+  S.eventos.concat(S.eventosSemana || []).forEach(ev => {
+    if (vistos.has(ev.id)) return;
+    const k = posicaoEm(ev, iso);
+    if (k >= 0) { vistos.add(ev.id); out.push({ tipo: 'evento', agenda: ev.agenda, ev: ev, k: k, dur: duracao(ev) }); }
+  });
+  return out.sort((a, b) => (chaveOrdem(a) < chaveOrdem(b) ? -1 : 1));
+}
+function linhaEventoDia(it, iso) {
+  const ev = it.ev;
+  return h('button', { type: 'button', class: 'lrow', onclick: () => abrirEvento(ev) },
+    h('span', { class: 'barra ag-' + ev.agenda, 'aria-hidden': 'true' }),
+    h('div', { class: 'rmain' },
+      h('div', { class: 'rtitle', text: ev.titulo }),
+      h('div', { class: 'rsub', text: [diaCurto(iso), horarioDia(ev, 0, it.dur || 0), ev.local, nomeAg(ev.agenda)].filter(Boolean).join(' · ') })),
+    h('span', { class: 'chev', text: '›', 'aria-hidden': 'true' }));
+}
+function quandoFoi(ts) {
+  const d = new Date(ts), dia = iso(d);
+  return (dia === hojeISO() ? 'Hoje' : diaCurto(dia)) + ', ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+
+async function alternarTarefa(t) {
+  try {
+    await q(sb.from('tarefas').update({ feita: !t.feita }).eq('id', t.id));
+    t.feita = !t.feita;
+    render();
+    toast(t.feita ? 'Feita · ' + t.texto : 'Voltou à lista');
+    carregarHoje().then(render);
+  } catch (e) { erro(e); }
+}
+function linhaTarefa(t, comDia) {
+  const hoje = hojeISO(), atraso = !t.feita && t.data && t.data < hoje;
+  const sub = t.data ? (atraso ? 'Desde ' + diaCurto(t.data) : comDia ? diaCurto(t.data) : null) : null;
+  return h('div', { class: 'lrow' + (t.feita ? ' feita' : '') },
+    h('button', { type: 'button', class: 'visto' + (t.feita ? ' on' : ''), role: 'checkbox', 'aria-checked': String(!!t.feita),
+      'aria-label': (t.feita ? 'Feita: ' : 'Marcar como feita: ') + t.texto, onclick: () => alternarTarefa(t) }, t.feita ? icon(ICONS.visto) : null),
+    h('button', { type: 'button', class: 'rmain linkrow', onclick: () => abrirTarefa(t) },
+      h('div', { class: 'rtitle', text: t.texto }),
+      sub ? h('div', { class: 'rsub' + (atraso ? ' warn' : ''), text: sub }) : null));
+}
+function abrirTarefa(t) {
+  const texto = h('input', { class: 'ginput', type: 'text', maxlength: '300', autocapitalize: 'sentences', 'aria-label': 'Tarefa', 'aria-required': 'true', value: t.texto });
+  const data = h('input', { class: 'ginput', type: 'date', 'aria-label': 'Data', value: t.data || '' });
+  let s;
+  s = sheet('Tarefa', [
+    group(grow('Tarefa', texto), grow('Data', data)),
+    hint('Sem data, fica na caixa de entrada até à revisão da semana.'),
+    t.data ? h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Tirar a data', onclick: () => { data.value = ''; } })) : null,
+    botaoApagar('Apagar tarefa', 'Apagar esta tarefa?', '«' + t.texto + '» sai da lista.', async () => {
+      await q(sb.from('tarefas').delete().eq('id', t.id));
+      S.tarefas = S.tarefas.filter(x => x.id !== t.id);
+      s.fechar(); render(); toast('Tarefa apagada');
+    }, () => s)
+  ], async () => {
+    const tx = texto.value.trim();
+    if (!tx) return s.erro('Escreve a tarefa.', texto);
+    await q(sb.from('tarefas').update({ texto: tx, data: data.value || null }).eq('id', t.id));
+    t.texto = tx; t.data = data.value || null;
+    render(); toast('Tarefa guardada');
+  });
+}
+async function capturarNaApp(inp, btn) {
+  const tx = inp.value.trim();
+  if (!tx) { inp.focus(); return; }
+  btn.disabled = true;
+  try {
+    const t = await q(sb.rpc('nova_tarefa', { p_texto: tx }));
+    S.capturaTxt = '';
+    S.tarefas = (S.tarefas || []).concat([t]);
+    render();
+    toast(t.data ? 'Guardada para ' + (t.data === hojeISO() ? 'hoje' : diaCurto(t.data)) : 'Na caixa de entrada');
+    const novo = document.getElementById('captura'); if (novo) novo.focus();
+    carregarHoje().then(render);
+  } catch (e) { erro(e); btn.disabled = false; }
+}
+
+function viewHoje() {
+  if (!S.tarefas) return carregando();
+  const hoje = hojeISO(), semana = somaDias(hoje, 7), out = [];
+  const inp = h('input', { id: 'captura', class: 'ginput', type: 'text', maxlength: '300', autocapitalize: 'sentences', enterkeyhint: 'done',
+    placeholder: 'Ex.: ligar ao seguro amanhã', 'aria-label': 'Nova tarefa', value: S.capturaTxt,
+    oninput: e => { S.capturaTxt = e.target.value; } });
+  const btn = h('button', { type: 'submit', class: 'link b', text: 'Guardar' });
+  out.push(h('form', { class: 'group captura', onsubmit: e => { e.preventDefault(); capturarNaApp(inp, btn); } }, h('div', { class: 'grow' }, inp, btn)));
+
+  // Hoje: tarefas (atrasadas e de hoje), pagamentos que vencem, agenda e Google
+  const atual = S.mes === mesAtual();
+  const tarefasHoje = S.tarefas.filter(t => t.data && t.data <= hoje);
+  const pagar = atual ? S.atrasados.concat(S.despesas.filter(x => !x.pago && x.data <= hoje && !S.atrasados.some(a => a.id === x.id))) : [];
+  const linhasHoje = [].concat(tarefasHoje.map(t => linhaTarefa(t)), pagar.map(linhaPagar),
+    eventosEm(hoje).map(linhaItemAgenda), googleEm(hoje).map(e => linhaGoogle(e, hoje)));
+  out.push(glabel(diaLongo(hoje)), linhasHoje.length ? lista(linhasHoje) : hint('Nada marcado para hoje.'));
+
+  // Próximos 7 dias
+  const prox = [];
+  S.tarefas.filter(t => t.data && t.data > hoje && t.data <= semana).forEach(t => prox.push([t.data, '1', linhaTarefa(t, true)]));
+  if (atual) S.despesas.filter(x => !x.pago && x.data > hoje && x.data <= semana).forEach(x => prox.push([x.data, '0', linhaPagar(x)]));
+  for (let i = 1; i <= 7; i++) {
+    const d = somaDias(hoje, i);
+    eventosEm(d).filter(it => it.k === 0).forEach(it => prox.push([d, '2', linhaEventoDia(it, d)]));
+    googleEm(d).filter(e => e.data === d).forEach(e => prox.push([d, '3', linhaGoogle(e, d, true)]));
+  }
+  prox.sort((a, b) => (a[0] + a[1] < b[0] + b[1] ? -1 : 1));
+  out.push(glabel('Próximos 7 dias'), prox.length ? lista(prox.map(p => p[2])) : hint('Nada nos próximos 7 dias.'));
+  if (S.google.erro) out.push(hint('Google Calendar: ' + S.google.erro, 'warn'));
+
+  // Caixa de entrada
+  const caixa = S.tarefas.filter(t => !t.data);
+  out.push(glabel('Caixa de entrada' + (caixa.length ? ' (' + caixa.length + ')' : '')));
+  if (caixa.length) out.push(lista(caixa.map(t => linhaTarefa(t))));
+  out.push(hint(caixa.length > 15 ? 'A caixa tem ' + caixa.length + ' tarefas: esvazia-a na revisão da semana (dá data, faz ou apaga).'
+    : caixa.length ? 'Toca numa tarefa para lhe dar data ou apagar. O círculo marca como feita.'
+      : 'Vazia. O que ditares no botão Action sem data cai aqui.', caixa.length > 15 ? 'warn' : null));
+
+  // Registo (log do departamento)
+  if (S.registos.length) {
+    out.push(glabel('Registo'), lista(S.registos.map(r => h('div', { class: 'lrow' },
+      h('div', { class: 'rmain' }, h('div', { class: 'rtitle small', text: r.texto }), h('div', { class: 'rsub', text: quandoFoi(r.em) }))))));
+  }
+  if (!S.registos.some(r => r.texto.startsWith('Capturada pelo Atalho'))) {
+    out.push(h('div', { class: 'linha-acoes' }, h('button', { type: 'button', class: 'link b', text: 'Configurar o botão Action', onclick: abrirPassosAtalho })));
+  }
+  return out;
+}
+
+// Passos do Atalho do botão Action (o iPhone está em inglês)
+function abrirPassosAtalho() {
+  const tk = (S.config && S.config.token_atalho) || '';
+  const b = t => h('b', { text: t });
+  sheet('Botão Action', [
+    hint('Carregas no botão Action, dizes a tarefa e ela entra aqui. Se disseres uma data («amanhã», «sexta», «dia 12»), fica marcada; senão vai para a caixa de entrada.'),
+    h('ol', { class: 'steps' },
+      h('li', null, 'Abre a app ', b('Shortcuts'), ', toca em ', b('+'), ' e chama-lhe ', b('GPP Tarefa'), '.'),
+      h('li', null, 'Junta a ação ', b('Dictate Text'), '. Em Language escolhe ', b('Portuguese (Portugal)'), ' e em Stop Listening ', b('After Pause'), '.'),
+      h('li', null, 'Junta ', b('Get Contents of URL'), ' e cola o URL tarefa. Abre as opções: Method ', b('POST'), '; em Headers junta ', b('apikey'), ' com a Chave; em Request Body escolhe ', b('JSON'), ' e junta dois campos Text: ', b('token'), ' com o Token e ', b('texto'), ' com a variável Dictated Text.'),
+      h('li', null, 'Junta ', b('Show Notification'), ' com Contents of URL, para veres a resposta.'),
+      h('li', null, 'Em ', b('Settings › Action Button'), ' desliza até ', b('Shortcut'), ' e escolhe ', b('GPP Tarefa'), '.')),
+    group(
+      linhaCopiar('URL tarefa', SUPABASE_URL + '/rest/v1/rpc/capturar', 'rpc/capturar'),
+      linhaCopiar('Chave', SUPABASE_KEY, SUPABASE_KEY.slice(0, 18) + '…'),
+      linhaCopiar('Token', tk, tk ? tk.slice(0, 8) + '…' + tk.slice(-4) : '—')),
+    hint('O token é a tua chave pessoal: não o partilhes. Experimenta: «Ligar ao contabilista amanhã».')
+  ], null);
+}
+
+// Ligação ao Google Calendar (endereço secreto iCal)
+const GOOGLE_ICS = /^https:\/\/calendar\.google\.com\/calendar\/ical\/\S+\.ics$/;
+function abrirGoogle() {
+  const atual = (S.config && S.config.google_ics) || '';
+  const url = h('input', { class: 'ginput', type: 'url', inputmode: 'url', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false',
+    'aria-label': 'Endereço secreto iCal', placeholder: 'https://calendar.google.com/…', value: atual });
+  const b = t => h('b', { text: t });
+  let s;
+  s = sheet('Google Calendar', [
+    hint('A app só lê o teu Google Calendar: os eventos aparecem em Hoje e na Agenda. Para criar ou mudar um evento do Google, usa o Google Calendar.'),
+    h('ol', { class: 'steps' },
+      h('li', null, 'No computador, abre ', b('calendar.google.com'), '.'),
+      h('li', null, 'Roda dentada › ', b('Definições'), ' (Settings).'),
+      h('li', null, 'À esquerda, escolhe o teu calendário em ', b('Definições dos meus calendários'), '.'),
+      h('li', null, 'Em ', b('Integrar calendário'), ' (Integrate calendar), copia o ', b('Endereço secreto no formato iCal'), ' (Secret address in iCal format) e cola aqui.')),
+    group(grow('Endereço', url)),
+    hint('Este endereço dá acesso ao teu calendário: fica guardado só na tua conta e não aparece em lado nenhum da app.'),
+    atual ? botaoApagar('Desligar o Google Calendar', 'Desligar o Google Calendar?', 'Os eventos do Google deixam de aparecer na app. O Google Calendar não muda.', async () => {
+      await q(sb.from('config').update({ google_ics: null }).eq('owner', S.user.id));
+      S.config.google_ics = null;
+      limparGoogle(); s.fechar(); render(); toast('Google Calendar desligado');
+    }, () => s) : null
+  ], async () => {
+    const v = url.value.trim();
+    if (!GOOGLE_ICS.test(v)) return s.erro('Cola o «Endereço secreto no formato iCal»: começa por https://calendar.google.com/calendar/ical/ e acaba em .ics.', url);
+    await q(sb.from('config').update({ google_ics: v }).eq('owner', S.user.id));
+    S.config.google_ics = v;
+    limparGoogle(); render(); toast('Google Calendar ligado');
+    carregarGoogle(hojeISO(), somaDias(hojeISO(), 7));
+  });
+  url.focus();
+}
+
 // ===================== Estrutura =====================
 function mesNav() {
   const max = addMes(mesAtual(), 1);
@@ -1292,14 +1543,19 @@ function irPara(t) {
   render();
   if (t === 'fixas') carregarFixas().then(render);
   if (t === 'inquilinos') carregarImoveis().then(render);
+  if (t === 'hoje') {
+    if (S.tarefas) S.tarefas = S.tarefas.filter(x => !x.feita);   // as feitas saem quando voltas ao ecrã
+    if (S.mes !== mesAtual()) { S.mes = mesAtual(); S.despesas = []; recarregar(); }
+    carregarHoje().then(render);
+  }
 }
 function render() {
   if (!S.user || S.bloqueado) return;
-  const views = { pagar: viewPagar, despesas: viewDespesas, comum: viewComum, inquilinos: viewInquilinos, agenda: viewAgenda, fixas: viewFixas, ajustes: viewAjustes };
-  const acoes = { pagar: () => abrirDespesa(), despesas: () => abrirDespesa(), comum: S.casal ? () => abrirDespesa(null, { comum: true }) : null, inquilinos: null, agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
-  const rotulos = { pagar: 'Nova despesa', despesas: 'Nova despesa', comum: 'Nova despesa em comum', inquilinos: 'Novo recebimento', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
+  const views = { hoje: viewHoje, pagar: viewPagar, despesas: viewDespesas, comum: viewComum, inquilinos: viewInquilinos, agenda: viewAgenda, fixas: viewFixas, ajustes: viewAjustes };
+  const acoes = { hoje: () => { const c = document.getElementById('captura'); if (c) c.focus(); }, pagar: () => abrirDespesa(), despesas: () => abrirDespesa(), comum: S.casal ? () => abrirDespesa(null, { comum: true }) : null, inquilinos: null, agenda: () => abrirEvento(null, S.diaSel), fixas: () => abrirFixa() };
+  const rotulos = { hoje: 'Nova tarefa', pagar: 'Nova despesa', despesas: 'Nova despesa', comum: 'Nova despesa em comum', inquilinos: 'Novo recebimento', agenda: 'Novo evento', fixas: 'Nova despesa fixa' };
   const botoes = h('div', { class: 'acts' },
-    S.tab === 'pagar' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
+    S.tab === 'pagar' || S.tab === 'hoje' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Ajustes', onclick: () => irPara('ajustes') }, icon(ICONS.ajustes)) : null,
     S.tab === 'despesas' || S.tab === 'pagar' ? h('button', { class: 'gearbtn', type: 'button', 'aria-label': 'Despesas fixas', onclick: () => irPara('fixas') }, icon(ICONS.fixas)) : null,
     S.tab === 'ajustes' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara(S.voltar || 'pagar') }) : null,
     S.tab === 'fixas' ? h('button', { class: 'link b', type: 'button', text: 'Fechar', onclick: () => irPara(S.voltar || 'pagar') }) : null,
@@ -1311,7 +1567,9 @@ function render() {
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Separadores' }, TABS.map(t => h('button', {
     type: 'button', class: 'tab' + (S.tab === t ? ' on' : ''), 'aria-current': S.tab === t ? 'page' : null, onclick: () => irPara(t)
   }, icon(ICONS[t]), h('span', { text: TITULOS[t] }))));
+  const focoCaptura = document.activeElement && document.activeElement.id === 'captura';
   app.replaceChildren(header, main, tabbar);
+  if (focoCaptura) { const c = document.getElementById('captura'); if (c) { c.focus(); c.setSelectionRange(c.value.length, c.value.length); } }
 }
 
 
@@ -1477,19 +1735,20 @@ function renderLogin(criar) {
 async function entrar(user) {
   S.user = user;
   S.mes = mesAtual();
-  S.tab = 'pagar';
-  S.despesas = []; S.casal = null;
+  S.tab = 'hoje';
+  S.despesas = []; S.casal = null; S.tarefas = null;
   app.replaceChildren(h('main', { 'aria-busy': 'true' }, carregando()));
   try { S.config = await q(sb.rpc('garantir_config')); }
   catch (e) { erro(e); S.config = {}; }
   render();
-  await Promise.all([carregarMes(), carregarFixas(), carregarCategorias(), carregarContas()]);
+  await Promise.all([carregarMes(), carregarFixas(), carregarCategorias(), carregarContas(), carregarHoje()]);
   render();
 }
 
 sb.auth.onAuthStateChange(ev => {
   if (ev === 'SIGNED_OUT') {
     S.user = null; S.config = null; S.despesas = []; S.atrasados = []; S.fixas = []; S.eventos = []; S.acertos = []; S.casal = null; S.imoveis = null; S.inquilinos = []; S.receb = []; S.despImovel = []; S.imovelSel = null; S.diaSel = null;
+    S.tarefas = null; S.registos = []; S.eventosSemana = []; S.capturaTxt = ''; limparGoogle();
     S.bloqueado = false;
     setTimeout(() => renderLogin(false), 0);
   }
